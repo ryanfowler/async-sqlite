@@ -5,7 +5,7 @@ use std::{
 
 use crate::{Client, ClientBuilder, Error};
 
-use futures_channel::oneshot::{self, Sender};
+use futures_channel::oneshot::{self, Receiver, Sender};
 use rusqlite::Connection;
 
 #[derive(Clone)]
@@ -72,24 +72,33 @@ impl Pool {
     }
 
     async fn get(&self) -> Result<ClientWrapper, Error> {
-        let client = {
+        let state = {
             let mut clients = self.inner.clients.lock().unwrap();
             if let Some(client) = clients.idle.pop() {
-                client
+                State::Available(client)
             } else if clients.count < self.inner.max_conns {
                 clients.count += 1;
-                drop(clients);
-                self.inner.client_builder.open().await?
+                State::Open
             } else {
                 let (tx, rx) = oneshot::channel();
                 clients.waiters.push(tx);
-                drop(clients);
-                rx.await?
+                State::Wait(rx)
             }
+        };
+        let client = match state {
+            State::Available(client) => client,
+            State::Open => self.inner.client_builder.open().await?,
+            State::Wait(rx) => rx.await?,
         };
         Ok(ClientWrapper {
             client,
             pool: &self.inner,
         })
     }
+}
+
+enum State {
+    Available(Client),
+    Open,
+    Wait(Receiver<Client>),
 }
