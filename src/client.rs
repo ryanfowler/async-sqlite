@@ -3,7 +3,7 @@ use std::{
     thread,
 };
 
-use crossbeam::channel::{unbounded, SendError, Sender};
+use crossbeam::channel::{bounded, unbounded, SendError, Sender};
 use futures_channel::oneshot::{self, Canceled};
 use rusqlite::{Connection, OpenFlags};
 
@@ -29,28 +29,30 @@ impl ClientBuilder {
     }
 
     pub async fn open(&self) -> Result<Client, Error> {
-        if let Some(path) = self.path.as_ref() {
-            Client::open(&path, self.flags).await
-        } else {
-            Client::open(":memory:", self.flags).await
-        }
+        Client::open(self.clone()).await
     }
 }
 
 #[derive(Clone)]
 pub struct Client {
-    sender: Sender<Command>,
+    conn_tx: Sender<Command>,
 }
 
 impl Client {
-    async fn open<P: AsRef<Path>>(path: P, flags: OpenFlags) -> Result<Self, Error> {
+    async fn open(builder: ClientBuilder) -> Result<Self, Error> {
         let (open_tx, open_rx) = oneshot::channel();
 
-        let path = path.as_ref().to_owned();
+        let flags = builder.flags;
+        let path = builder.path;
         thread::spawn(move || {
             let (conn_tx, conn_rx) = unbounded();
 
-            let mut conn = match Connection::open_with_flags(path, flags) {
+            let conn_res = if let Some(path) = path {
+                Connection::open_with_flags(path, flags)
+            } else {
+                Connection::open_with_flags(":memory:", flags)
+            };
+            let mut conn = match conn_res {
                 Ok(conn) => conn,
                 Err(err) => {
                     _ = open_tx.send(Err(err));
@@ -62,20 +64,20 @@ impl Client {
             // should also be dropped by failing the send into the onshot
             // channel below. This thread will exit below when listening on the
             // conn_rx which should be disconnected.
-            let self_ = Self { sender: conn_tx };
+            let self_ = Self { conn_tx };
             _ = open_tx.send(Ok(self_));
 
             while let Ok(cmd) = conn_rx.recv() {
                 match cmd {
                     Command::Func(func) => func(&mut conn),
-                    Command::Shutdown(tx) => match conn.close() {
+                    Command::Shutdown(func) => match conn.close() {
                         Ok(()) => {
-                            _ = tx.send(Ok(()));
+                            func(Ok(()));
                             return;
                         }
                         Err((c, e)) => {
                             conn = c;
-                            _ = tx.send(Err(e.into()));
+                            func(Err(e.into()));
                         }
                     },
                 }
@@ -91,7 +93,7 @@ impl Client {
         T: Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
-        self.sender.send(Command::Func(Box::new(move |conn| {
+        self.conn_tx.send(Command::Func(Box::new(move |conn| {
             _ = tx.send(func(conn));
         })))?;
         rx.await?
@@ -103,7 +105,7 @@ impl Client {
         T: Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
-        self.sender.send(Command::Func(Box::new(move |conn| {
+        self.conn_tx.send(Command::Func(Box::new(move |conn| {
             _ = tx.send(func(conn));
         })))?;
         rx.await?
@@ -111,31 +113,49 @@ impl Client {
 
     pub async fn close(&mut self) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
-        if self.sender.send(Command::Shutdown(tx)).is_err() {
-            // If the receiving thread has already shut down, return Ok here.
+        let func = Box::new(|res| _ = tx.send(res));
+        if self.conn_tx.send(Command::Shutdown(func)).is_err() {
+            // If the worker thread has already shut down, return Ok here.
             return Ok(());
         }
-        rx.await?
+        // If receiving fails, the
+        rx.await.unwrap_or(Ok(()))
+    }
+
+    fn _close_sync(&mut self) -> Result<(), Error> {
+        let (tx, rx) = bounded(1);
+        let func = Box::new(move |res| _ = tx.send(res));
+        if self.conn_tx.send(Command::Shutdown(func)).is_err() {
+            return Ok(());
+        }
+        rx.recv().unwrap_or(Ok(()))
     }
 }
 
 enum Command {
     Func(Box<dyn FnOnce(&mut Connection) + Send>),
-    Shutdown(oneshot::Sender<Result<(), Error>>),
+    Shutdown(Box<dyn FnOnce(Result<(), Error>) + Send>),
 }
 
 #[derive(Debug)]
 pub enum Error {
-    ConnectionClosed,
+    Closed,
     Rusqlite(rusqlite::Error),
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Rusqlite(err) => Some(err),
+            _ => None,
+        }
+    }
+}
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::ConnectionClosed => write!(f, "connection to sqlite database closed"),
+            Error::Closed => write!(f, "connection to sqlite database closed"),
             Error::Rusqlite(err) => err.fmt(f),
         }
     }
@@ -149,12 +169,12 @@ impl From<rusqlite::Error> for Error {
 
 impl<T> From<SendError<T>> for Error {
     fn from(_value: SendError<T>) -> Self {
-        Error::ConnectionClosed
+        Error::Closed
     }
 }
 
 impl From<Canceled> for Error {
     fn from(_value: Canceled) -> Self {
-        Error::ConnectionClosed
+        Error::Closed
     }
 }

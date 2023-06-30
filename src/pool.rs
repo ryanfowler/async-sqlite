@@ -5,6 +5,7 @@ use std::{
 
 use crate::{Client, ClientBuilder, Error};
 
+use async_channel::unbounded;
 use futures_channel::oneshot::{self, Receiver, Sender};
 use rusqlite::Connection;
 
@@ -23,6 +24,7 @@ struct InnerPool {
 struct Clients {
     count: usize,
     idle: Vec<Client>,
+    closing: Option<async_channel::Sender<Option<Client>>>,
     waiters: Vec<Sender<Client>>,
 }
 
@@ -42,6 +44,15 @@ impl Deref for ClientWrapper<'_> {
 impl Drop for ClientWrapper<'_> {
     fn drop(&mut self) {
         let mut clients = self.pool.clients.lock().unwrap();
+        if clients.closing.is_some() {
+            clients.count -= 1;
+            _ = clients
+                .closing
+                .as_ref()
+                .unwrap()
+                .send_blocking(Some(self.client.clone()));
+            return;
+        }
         while let Some(tx) = clients.waiters.pop() {
             if tx.send(self.client.clone()).is_ok() {
                 return;
@@ -71,9 +82,45 @@ impl Pool {
         client.conn(func).await
     }
 
+    pub async fn close(&mut self) -> Result<(), Error> {
+        let (tx, rx) = unbounded();
+
+        let mut idle = {
+            let mut clients = self.inner.clients.lock().unwrap();
+            if clients.closing.is_some() {
+                return Err(Error::Closed);
+            }
+            clients.closing = Some(tx);
+            std::mem::take(&mut clients.waiters); // Drop any waiters.
+            std::mem::take(&mut clients.idle)
+        };
+
+        while let Some(mut client) = idle.pop() {
+            // What should we do when we encounter individual errors?
+            _ = client.close().await;
+        }
+
+        loop {
+            if let Ok(Some(mut client)) = rx.try_recv() {
+                _ = client.close().await;
+            }
+
+            if self.inner.clients.lock().unwrap().count == 0 {
+                return Ok(());
+            }
+
+            if let Some(mut client) = rx.recv().await.unwrap() {
+                _ = client.close().await;
+            }
+        }
+    }
+
     async fn get(&self) -> Result<ClientWrapper, Error> {
         let state = {
             let mut clients = self.inner.clients.lock().unwrap();
+            if clients.closing.is_some() {
+                return Err(Error::Closed);
+            }
             if let Some(client) = clients.idle.pop() {
                 State::Available(client)
             } else if clients.count < self.inner.max_conns {
@@ -87,7 +134,17 @@ impl Pool {
         };
         let client = match state {
             State::Available(client) => client,
-            State::Open => self.inner.client_builder.open().await?,
+            State::Open => match self.inner.client_builder.open().await {
+                Ok(client) => client,
+                Err(err) => {
+                    let mut clients = self.inner.clients.lock().unwrap();
+                    clients.count -= 1;
+                    if let Some(tx) = clients.closing.as_ref() {
+                        _ = tx.send_blocking(None);
+                    }
+                    return Err(err);
+                }
+            },
             State::Wait(rx) => rx.await?,
         };
         Ok(ClientWrapper {

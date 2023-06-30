@@ -6,6 +6,7 @@ license = "MIT"
 description = "A library for working with sqlite asynchronously"
 
 [dependencies]
+async-channel = { version = "1.8.0" }
 crossbeam = { version = "0.8.2" }
 futures-channel = { version = "0.3.28" }
 rusqlite = { version = "0.29.0", features = ["bundled"] }
