@@ -55,16 +55,14 @@ impl Pool {
             .clients
             .iter()
             .map(|client| client.clone().close());
-        // What should we do with any client closing errors?
-        _ = join_all(futures).await;
-        Ok(())
+        join_all(futures)
+            .await
+            .into_iter()
+            .collect::<Result<(), Error>>()
     }
 
     fn get(&self) -> &Client {
         let n = self.state.counter.fetch_add(1, Relaxed);
-        self.state
-            .clients
-            .get(n as usize % self.state.clients.len())
-            .unwrap()
+        &self.state.clients[n as usize % self.state.clients.len()]
     }
 }
