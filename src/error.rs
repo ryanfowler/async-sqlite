@@ -1,6 +1,10 @@
+/// Enum of all possible errors.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
+    /// Indicates that the connection to the sqlite database is closed.
     Closed,
+    /// Represents a [`rusqlite::Error`].
     Rusqlite(rusqlite::Error),
 }
 
@@ -34,8 +38,8 @@ impl<T> From<crossbeam::channel::SendError<T>> for Error {
     }
 }
 
-impl From<futures_channel::oneshot::Canceled> for Error {
-    fn from(_value: futures_channel::oneshot::Canceled) -> Self {
+impl From<futures::channel::oneshot::Canceled> for Error {
+    fn from(_value: futures::channel::oneshot::Canceled) -> Self {
         Error::Closed
     }
 }

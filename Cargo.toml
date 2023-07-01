@@ -1,12 +1,11 @@
 [package]
 name = "async-sqlite"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 license = "MIT"
 description = "A library for working with sqlite asynchronously"
 
 [dependencies]
-async-channel = { version = "1.8.0" }
 crossbeam = { version = "0.8.2" }
-futures-channel = { version = "0.3.28" }
+futures = { version = "0.3.28" }
 rusqlite = { version = "0.29.0", features = ["bundled"] }

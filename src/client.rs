@@ -6,9 +6,28 @@ use std::{
 use crate::Error;
 
 use crossbeam::channel::{bounded, unbounded, Sender};
-use futures_channel::oneshot;
+use futures::channel::oneshot;
 use rusqlite::{Connection, OpenFlags};
 
+/// A `ClientBuilder` can be used to create a [`Client`] with custom
+/// configuration.
+///
+/// For more information on creating a sqlite connection, see the
+/// [rusqlite docs](rusqlite::Connection::open()).
+///
+/// # Examples
+///
+/// ```rust
+/// # use async_sqlite::ClientBuilder;
+/// # async fn run() -> Result<(), async_sqlite::Error> {
+/// let mut client = ClientBuilder::new().path("path/to/db.sqlite3").open().await?;
+///
+/// // ...
+///
+/// client.close().await?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug, Default)]
 pub struct ClientBuilder {
     path: Option<PathBuf>,
@@ -16,22 +35,40 @@ pub struct ClientBuilder {
 }
 
 impl ClientBuilder {
+    /// Returns a new [`ClientBuilder`] with the default settings.
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn path<P: AsRef<Path>>(&mut self, path: P) -> &mut Self {
+    /// Specify the path of the sqlite3 database to open.
+    ///
+    /// By default, an in-memory database is used.
+    pub fn path<P: AsRef<Path>>(mut self, path: P) -> Self {
         self.path = Some(path.as_ref().into());
         self
     }
 
-    pub fn flags(&mut self, flags: OpenFlags) -> &mut Self {
+    /// Specify the [`OpenFlags`] to use when opening a new connection.
+    ///
+    /// By default, [`OpenFlags::default()`] is used.
+    pub fn flags(mut self, flags: OpenFlags) -> Self {
         self.flags = flags;
         self
     }
 
-    pub async fn open(&self) -> Result<Client, Error> {
-        Client::open(self.clone()).await
+    /// Returns a new [`Client`] that uses the `ClientBuilder` configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use async_sqlite::ClientBuilder;
+    /// # async fn run() -> Result<(), async_sqlite::Error> {
+    /// let client = ClientBuilder::new().open().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn open(self) -> Result<Client, Error> {
+        Client::open(self).await
     }
 }
 
@@ -124,7 +161,7 @@ impl Client {
     ///
     /// After this method returns, all calls to `self::conn()` or
     /// `self::conn_mut()` will return an [`Error::Closed`] error.
-    pub async fn close(&mut self) -> Result<(), Error> {
+    pub async fn close(self) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
         let func = Box::new(|res| _ = tx.send(res));
         if self.conn_tx.send(Command::Shutdown(func)).is_err() {
