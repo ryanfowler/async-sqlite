@@ -101,6 +101,8 @@ impl Pool {
         }
 
         loop {
+            // BUG: Must drain channel before checking connection count.
+
             if let Ok(Some(mut client)) = rx.try_recv() {
                 _ = client.close().await;
             }

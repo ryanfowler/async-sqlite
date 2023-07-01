@@ -3,8 +3,10 @@ use std::{
     thread,
 };
 
-use crossbeam::channel::{bounded, unbounded, SendError, Sender};
-use futures_channel::oneshot::{self, Canceled};
+use crate::Error;
+
+use crossbeam::channel::{bounded, unbounded, Sender};
+use futures_channel::oneshot;
 use rusqlite::{Connection, OpenFlags};
 
 #[derive(Clone, Debug, Default)]
@@ -33,6 +35,13 @@ impl ClientBuilder {
     }
 }
 
+enum Command {
+    Func(Box<dyn FnOnce(&mut Connection) + Send>),
+    Shutdown(Box<dyn FnOnce(Result<(), Error>) + Send>),
+}
+
+/// Client represents a single sqlite connection that can be used from async
+/// contexts.
 #[derive(Clone)]
 pub struct Client {
     conn_tx: Sender<Command>,
@@ -42,15 +51,13 @@ impl Client {
     async fn open(builder: ClientBuilder) -> Result<Self, Error> {
         let (open_tx, open_rx) = oneshot::channel();
 
-        let flags = builder.flags;
-        let path = builder.path;
         thread::spawn(move || {
             let (conn_tx, conn_rx) = unbounded();
 
-            let conn_res = if let Some(path) = path {
-                Connection::open_with_flags(path, flags)
+            let conn_res = if let Some(path) = builder.path {
+                Connection::open_with_flags(path, builder.flags)
             } else {
-                Connection::open_with_flags(":memory:", flags)
+                Connection::open_with_flags(":memory:", builder.flags)
             };
             let mut conn = match conn_res {
                 Ok(conn) => conn,
@@ -87,30 +94,36 @@ impl Client {
         Ok(open_rx.await??)
     }
 
+    /// Invokes the provided function with a [`rusqlite::Connection`].
     pub async fn conn<F, T>(&self, func: F) -> Result<T, Error>
     where
-        F: FnOnce(&Connection) -> Result<T, Error> + Send + 'static,
+        F: FnOnce(&Connection) -> Result<T, rusqlite::Error> + Send + 'static,
         T: Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
         self.conn_tx.send(Command::Func(Box::new(move |conn| {
             _ = tx.send(func(conn));
         })))?;
-        rx.await?
+        Ok(rx.await??)
     }
 
+    /// Invokes the provided function with a mutable [`rusqlite::Connection`].
     pub async fn conn_mut<F, T>(&self, func: F) -> Result<T, Error>
     where
-        F: FnOnce(&mut Connection) -> Result<T, Error> + Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T, rusqlite::Error> + Send + 'static,
         T: Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
         self.conn_tx.send(Command::Func(Box::new(move |conn| {
             _ = tx.send(func(conn));
         })))?;
-        rx.await?
+        Ok(rx.await??)
     }
 
+    /// Closes the underlying sqlite connection.
+    ///
+    /// After this method returns, all calls to `self::conn()` or
+    /// `self::conn_mut()` will return an [`Error::Closed`] error.
     pub async fn close(&mut self) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
         let func = Box::new(|res| _ = tx.send(res));
@@ -129,52 +142,5 @@ impl Client {
             return Ok(());
         }
         rx.recv().unwrap_or(Ok(()))
-    }
-}
-
-enum Command {
-    Func(Box<dyn FnOnce(&mut Connection) + Send>),
-    Shutdown(Box<dyn FnOnce(Result<(), Error>) + Send>),
-}
-
-#[derive(Debug)]
-pub enum Error {
-    Closed,
-    Rusqlite(rusqlite::Error),
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Error::Rusqlite(err) => Some(err),
-            _ => None,
-        }
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::Closed => write!(f, "connection to sqlite database closed"),
-            Error::Rusqlite(err) => err.fmt(f),
-        }
-    }
-}
-
-impl From<rusqlite::Error> for Error {
-    fn from(value: rusqlite::Error) -> Self {
-        Error::Rusqlite(value)
-    }
-}
-
-impl<T> From<SendError<T>> for Error {
-    fn from(_value: SendError<T>) -> Self {
-        Error::Closed
-    }
-}
-
-impl From<Canceled> for Error {
-    fn from(_value: Canceled) -> Self {
-        Error::Closed
     }
 }

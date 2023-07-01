@@ -1,7 +1,7 @@
 pub use rusqlite;
 
 mod client;
-mod pool;
+mod error;
 
-pub use client::{Client, ClientBuilder, Error};
-pub use pool::Pool;
+pub use client::{Client, ClientBuilder};
+pub use error::Error;
