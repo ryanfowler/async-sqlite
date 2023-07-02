@@ -1,2 +1,5 @@
 /target
 /Cargo.lock
+
+/test-async-macro/target
+/test-async-macro/Cargo.lock

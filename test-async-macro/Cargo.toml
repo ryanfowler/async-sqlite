@@ -1,0 +1,13 @@
+[package]
+name = "test-async-macro"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "test_async_macro"
+path = "src/lib.rs"
+proc-macro = true
+
+[dependencies]
+quote = { version = "1.0.29" }
+syn = { version = "2.0.22" }
