@@ -235,10 +235,9 @@ mod tests {
     #[test_async]
     async fn test_journal_mode() {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let path = tmp_dir.path().join("sqlite.db");
         let client = ClientBuilder::new()
             .journal_mode(JournalMode::Wal)
-            .path(path)
+            .path(tmp_dir.path().join("sqlite.db"))
             .open()
             .await
             .expect("client unable to be opened");
@@ -252,9 +251,8 @@ mod tests {
     #[test_async]
     async fn test_concurrency() {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let path = tmp_dir.path().join("sqlite.db");
         let client = ClientBuilder::new()
-            .path(path)
+            .path(tmp_dir.path().join("sqlite.db"))
             .open()
             .await
             .expect("client unable to be opened");
