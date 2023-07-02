@@ -32,6 +32,7 @@ use rusqlite::{Connection, OpenFlags};
 pub struct ClientBuilder {
     path: Option<PathBuf>,
     flags: OpenFlags,
+    journal_mode: Option<JournalMode>,
 }
 
 impl ClientBuilder {
@@ -53,6 +54,14 @@ impl ClientBuilder {
     /// By default, [`OpenFlags::default()`] is used.
     pub fn flags(mut self, flags: OpenFlags) -> Self {
         self.flags = flags;
+        self
+    }
+
+    /// Specify the [`JournalMode`] to set when opening a new connection.
+    ///
+    /// By default, no `journal_mode` is explicity set.
+    pub fn journal_mode(mut self, journal_mode: JournalMode) -> Self {
+        self.journal_mode = Some(journal_mode);
         self
     }
 
@@ -88,6 +97,7 @@ impl Client {
     async fn open(builder: ClientBuilder) -> Result<Self, Error> {
         let (open_tx, open_rx) = oneshot::channel();
 
+        let mut builder = builder;
         thread::spawn(move || {
             let (conn_tx, conn_rx) = unbounded();
 
@@ -103,6 +113,14 @@ impl Client {
                     return;
                 }
             };
+
+            if let Some(journal_mode) = builder.journal_mode.take() {
+                let val = journal_mode.as_str();
+                if let Err(err) = conn.pragma_update(None, "journal_mode", val) {
+                    _ = open_tx.send(Err(err));
+                    return;
+                }
+            }
 
             // If the calling promise is dropped, the Client created here
             // should also be dropped by failing the send into the onshot
@@ -179,5 +197,32 @@ impl Client {
             return Ok(());
         }
         rx.recv().unwrap_or(Ok(()))
+    }
+}
+
+/// The possible sqlite journal modes.
+///
+/// For more information, please see the [sqlite docs](https://www.sqlite.org/pragma.html#pragma_journal_mode).
+#[derive(Clone, Debug)]
+pub enum JournalMode {
+    Delete,
+    Truncate,
+    Persist,
+    Memory,
+    Wal,
+    Off,
+}
+
+impl JournalMode {
+    /// Returns the appropriate string representation of the journal mode.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Delete => "DELETE",
+            Self::Truncate => "TRUNCATE",
+            Self::Persist => "PERSIST",
+            Self::Memory => "MEMORY",
+            Self::Wal => "WAL",
+            Self::Off => "OFF",
+        }
     }
 }

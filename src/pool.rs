@@ -21,7 +21,7 @@ struct State {
 impl Pool {
     pub async fn new(builder: ClientBuilder, max_conns: usize) -> Result<Self, Error> {
         let opens = (0..max_conns).map(|_| builder.clone().open());
-        let clients: Vec<Client> = join_all(opens)
+        let clients = join_all(opens)
             .await
             .into_iter()
             .collect::<Result<Vec<Client>, Error>>()?;
