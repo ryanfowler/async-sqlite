@@ -5,7 +5,7 @@ use std::{
 
 use crate::Error;
 
-use crossbeam::channel::{bounded, unbounded, Sender};
+use crossbeam_channel::{bounded, unbounded, Sender};
 use futures_channel::oneshot;
 use rusqlite::{Connection, OpenFlags};
 
@@ -190,6 +190,39 @@ impl Client {
         rx.await.unwrap_or(Ok(()))
     }
 
+    /// Invokes the provided function with a [`rusqlite::Connection`], blocking
+    /// the current thread until completion.
+    fn _conn_sync<F, T>(&self, func: F) -> Result<T, Error>
+    where
+        F: FnOnce(&Connection) -> Result<T, rusqlite::Error> + Send + 'static,
+        T: Send + 'static,
+    {
+        let (tx, rx) = bounded(1);
+        self.conn_tx.send(Command::Func(Box::new(move |conn| {
+            _ = tx.send(func(conn));
+        })))?;
+        Ok(rx.recv()??)
+    }
+
+    /// Invokes the provided function with a mutable [`rusqlite::Connection`],
+    /// blocking the current thread until completion.
+    fn _conn_mut_sync<F, T>(&self, func: F) -> Result<T, Error>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, rusqlite::Error> + Send + 'static,
+        T: Send + 'static,
+    {
+        let (tx, rx) = bounded(1);
+        self.conn_tx.send(Command::Func(Box::new(move |conn| {
+            _ = tx.send(func(conn));
+        })))?;
+        Ok(rx.recv()??)
+    }
+
+    /// Closes the underlying sqlite connection, blocking the current thread
+    /// until complete.
+    ///
+    /// After this method returns, all calls to `self::conn_sync()` or
+    /// `self::conn_mut_sync()` will return an [`Error::Closed`] error.
     fn _close_sync(&mut self) -> Result<(), Error> {
         let (tx, rx) = bounded(1);
         let func = Box::new(move |res| _ = tx.send(res));
