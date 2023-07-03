@@ -6,4 +6,4 @@ mod pool;
 
 pub use client::{Client, ClientBuilder, JournalMode};
 pub use error::Error;
-pub use pool::Pool;
+pub use pool::{Pool, PoolBuilder};

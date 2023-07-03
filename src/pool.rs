@@ -1,12 +1,113 @@
-use std::sync::{
-    atomic::{AtomicU64, Ordering::Relaxed},
-    Arc,
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering::Relaxed},
+        Arc,
+    },
 };
 
-use crate::{Client, ClientBuilder, Error};
+use crate::{Client, ClientBuilder, Error, JournalMode};
 
-use futures::future::join_all;
-use rusqlite::Connection;
+use futures_util::future::join_all;
+use rusqlite::{Connection, OpenFlags};
+
+/// A `PoolBuilder` can be used to create a [`Pool`] with custom
+/// configuration.
+///
+/// See [`Client`] for more information.
+///
+/// # Examples
+///
+/// ```rust
+/// # use async_sqlite::PoolBuilder;
+/// # async fn run() -> Result<(), async_sqlite::Error> {
+/// let pool = PoolBuilder::new().path("path/to/db.sqlite3").open().await?;
+///
+/// // ...
+///
+/// pool.close().await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct PoolBuilder {
+    path: Option<PathBuf>,
+    flags: OpenFlags,
+    journal_mode: Option<JournalMode>,
+    num_conns: Option<usize>,
+}
+
+impl PoolBuilder {
+    /// Returns a new [`PoolBuilder`] with the default settings.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Specify the path of the sqlite3 database to open.
+    ///
+    /// By default, an in-memory database is used.
+    pub fn path<P: AsRef<Path>>(mut self, path: P) -> Self {
+        self.path = Some(path.as_ref().into());
+        self
+    }
+
+    /// Specify the [`OpenFlags`] to use when opening a new connection.
+    ///
+    /// By default, [`OpenFlags::default()`] is used.
+    pub fn flags(mut self, flags: OpenFlags) -> Self {
+        self.flags = flags;
+        self
+    }
+
+    /// Specify the [`JournalMode`] to set when opening a new connection.
+    ///
+    /// By default, no `journal_mode` is explicity set.
+    pub fn journal_mode(mut self, journal_mode: JournalMode) -> Self {
+        self.journal_mode = Some(journal_mode);
+        self
+    }
+
+    /// Specify the number of sqlite connections to open as part of the pool.
+    ///
+    /// Defaults to the number of logical CPUs of the current system.
+    pub fn num_conns(mut self, num_conns: usize) -> Self {
+        self.num_conns = Some(num_conns);
+        self
+    }
+
+    /// Returns a new [`Pool`] that uses the `PoolBuilder` configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use async_sqlite::PoolBuilder;
+    /// # async fn run() -> Result<(), async_sqlite::Error> {
+    /// let pool = PoolBuilder::new().open().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn open(self) -> Result<Pool, Error> {
+        let num_conns = self.num_conns.unwrap_or_else(num_cpus::get);
+        let opens = (0..num_conns).map(|_| {
+            ClientBuilder {
+                path: self.path.clone(),
+                flags: self.flags,
+                journal_mode: self.journal_mode,
+            }
+            .open()
+        });
+        let clients = join_all(opens)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<Client>, Error>>()?;
+        Ok(Pool {
+            state: Arc::new(State {
+                clients,
+                counter: AtomicU64::new(0),
+            }),
+        })
+    }
+}
 
 /// A simple Pool of sqlite connections.
 ///
@@ -22,22 +123,6 @@ struct State {
 }
 
 impl Pool {
-    /// Returns a new [`Pool`] with the provided client configuration and
-    /// number of connections.
-    pub async fn new(builder: ClientBuilder, num_conns: usize) -> Result<Self, Error> {
-        let opens = (0..num_conns).map(|_| builder.clone().open());
-        let clients = join_all(opens)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<Client>, Error>>()?;
-        Ok(Self {
-            state: Arc::new(State {
-                clients,
-                counter: AtomicU64::new(0),
-            }),
-        })
-    }
-
     /// Invokes the provided function with a [`rusqlite::Connection`].
     pub async fn conn<F, T>(&self, func: F) -> Result<T, Error>
     where
@@ -86,8 +171,10 @@ mod tests {
     #[test_async]
     async fn test_pool() {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let builder = ClientBuilder::new().path(tmp_dir.path().join("sqlite.db"));
-        let pool = Pool::new(builder, 2)
+        let pool = PoolBuilder::new()
+            .path(tmp_dir.path().join("sqlite.db"))
+            .num_conns(2)
+            .open()
             .await
             .expect("client unable to be opened");
 

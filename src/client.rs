@@ -6,7 +6,7 @@ use std::{
 use crate::Error;
 
 use crossbeam::channel::{bounded, unbounded, Sender};
-use futures::channel::oneshot;
+use futures_channel::oneshot;
 use rusqlite::{Connection, OpenFlags};
 
 /// A `ClientBuilder` can be used to create a [`Client`] with custom
@@ -20,7 +20,7 @@ use rusqlite::{Connection, OpenFlags};
 /// ```rust
 /// # use async_sqlite::ClientBuilder;
 /// # async fn run() -> Result<(), async_sqlite::Error> {
-/// let mut client = ClientBuilder::new().path("path/to/db.sqlite3").open().await?;
+/// let client = ClientBuilder::new().path("path/to/db.sqlite3").open().await?;
 ///
 /// // ...
 ///
@@ -30,9 +30,9 @@ use rusqlite::{Connection, OpenFlags};
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct ClientBuilder {
-    path: Option<PathBuf>,
-    flags: OpenFlags,
-    journal_mode: Option<JournalMode>,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) flags: OpenFlags,
+    pub(crate) journal_mode: Option<JournalMode>,
 }
 
 impl ClientBuilder {
@@ -203,7 +203,7 @@ impl Client {
 /// The possible sqlite journal modes.
 ///
 /// For more information, please see the [sqlite docs](https://www.sqlite.org/pragma.html#pragma_journal_mode).
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum JournalMode {
     Delete,
     Truncate,

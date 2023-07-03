@@ -38,8 +38,8 @@ impl<T> From<crossbeam::channel::SendError<T>> for Error {
     }
 }
 
-impl From<futures::channel::oneshot::Canceled> for Error {
-    fn from(_value: futures::channel::oneshot::Canceled) -> Self {
+impl From<futures_channel::oneshot::Canceled> for Error {
+    fn from(_value: futures_channel::oneshot::Canceled) -> Self {
         Error::Closed
     }
 }
