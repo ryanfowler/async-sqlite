@@ -276,7 +276,7 @@ mod tests {
                 Ok(())
             })
         });
-        futures::future::join_all(fs)
+        futures_util::future::join_all(fs)
             .await
             .into_iter()
             .collect::<Result<(), Error>>()
