@@ -32,8 +32,14 @@ impl From<rusqlite::Error> for Error {
     }
 }
 
-impl<T> From<crossbeam::channel::SendError<T>> for Error {
-    fn from(_value: crossbeam::channel::SendError<T>) -> Self {
+impl<T> From<crossbeam_channel::SendError<T>> for Error {
+    fn from(_value: crossbeam_channel::SendError<T>) -> Self {
+        Error::Closed
+    }
+}
+
+impl From<crossbeam_channel::RecvError> for Error {
+    fn from(_value: crossbeam_channel::RecvError) -> Self {
         Error::Closed
     }
 }
