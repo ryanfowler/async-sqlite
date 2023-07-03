@@ -8,6 +8,9 @@ use crate::{Client, ClientBuilder, Error};
 use futures::future::join_all;
 use rusqlite::Connection;
 
+/// A simple Pool of sqlite connections.
+///
+/// A Pool has the same API as an individual [`Client`].
 #[derive(Clone)]
 pub struct Pool {
     state: Arc<State>,
@@ -33,6 +36,7 @@ impl Pool {
         })
     }
 
+    /// Invokes the provided function with a [`rusqlite::Connection`].
     pub async fn conn<F, T>(&self, func: F) -> Result<T, Error>
     where
         F: FnOnce(&Connection) -> Result<T, rusqlite::Error> + Send + 'static,
@@ -41,6 +45,7 @@ impl Pool {
         self.get().conn(func).await
     }
 
+    /// Invokes the provided function with a mutable [`rusqlite::Connection`].
     pub async fn conn_mut<F, T>(&self, func: F) -> Result<T, Error>
     where
         F: FnOnce(&mut Connection) -> Result<T, rusqlite::Error> + Send + 'static,
@@ -49,6 +54,10 @@ impl Pool {
         self.get().conn_mut(func).await
     }
 
+    /// Closes the underlying sqlite connections.
+    ///
+    /// After this method returns, all calls to `self::conn()` or
+    /// `self::conn_mut()` will return an [`Error::Closed`] error.
     pub async fn close(self) -> Result<(), Error> {
         let futures = self
             .state
