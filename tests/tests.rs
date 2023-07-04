@@ -7,9 +7,7 @@ macro_rules! async_test {
             fn [< $name _async_std >] () {
                 ::async_std::task::block_on($name());
             }
-        }
 
-        paste::item! {
             #[::core::prelude::v1::test]
             fn [< $name _tokio >] () {
                 ::tokio::runtime::Builder::new_current_thread()
