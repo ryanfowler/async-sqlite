@@ -33,6 +33,7 @@ pub struct ClientBuilder {
     pub(crate) path: Option<PathBuf>,
     pub(crate) flags: OpenFlags,
     pub(crate) journal_mode: Option<JournalMode>,
+    pub(crate) vfs: Option<String>,
 }
 
 impl ClientBuilder {
@@ -62,6 +63,12 @@ impl ClientBuilder {
     /// By default, no `journal_mode` is explicity set.
     pub fn journal_mode(mut self, journal_mode: JournalMode) -> Self {
         self.journal_mode = Some(journal_mode);
+        self
+    }
+
+    /// Specify the name of the [vfs](https://www.sqlite.org/vfs.html) to use.
+    pub fn vfs(mut self, vfs: &str) -> Self {
+        self.vfs = Some(vfs.to_owned());
         self
     }
 
@@ -97,16 +104,10 @@ impl Client {
     async fn open(builder: ClientBuilder) -> Result<Self, Error> {
         let (open_tx, open_rx) = oneshot::channel();
 
-        let mut builder = builder;
         thread::spawn(move || {
             let (conn_tx, conn_rx) = unbounded();
 
-            let conn_res = if let Some(path) = builder.path {
-                Connection::open_with_flags(path, builder.flags)
-            } else {
-                Connection::open_with_flags(":memory:", builder.flags)
-            };
-            let mut conn = match conn_res {
+            let mut conn = match Client::create_conn(builder) {
                 Ok(conn) => conn,
                 Err(err) => {
                     _ = open_tx.send(Err(err));
@@ -114,20 +115,8 @@ impl Client {
                 }
             };
 
-            if let Some(journal_mode) = builder.journal_mode.take() {
-                let val = journal_mode.as_str();
-                if let Err(err) = conn.pragma_update(None, "journal_mode", val) {
-                    _ = open_tx.send(Err(err));
-                    return;
-                }
-            }
-
-            // If the calling promise is dropped, the Client created here
-            // should also be dropped by failing the send into the onshot
-            // channel below. This thread will exit below when listening on the
-            // conn_rx which should be disconnected.
-            let self_ = Self { conn_tx };
-            _ = open_tx.send(Ok(self_));
+            let client = Self { conn_tx };
+            _ = open_tx.send(Ok(client));
 
             while let Ok(cmd) = conn_rx.recv() {
                 match cmd {
@@ -147,6 +136,23 @@ impl Client {
         });
 
         Ok(open_rx.await??)
+    }
+
+    fn create_conn(mut builder: ClientBuilder) -> Result<Connection, rusqlite::Error> {
+        let path = builder.path.take().unwrap_or_else(|| ":memory:".into());
+        let conn = if let Some(vfs) = builder.vfs.take() {
+            Connection::open_with_flags_and_vfs(path, builder.flags, &vfs)?
+        } else {
+            Connection::open_with_flags(path, builder.flags)?
+        };
+
+        if let Some(journal_mode) = builder.journal_mode.take() {
+            let val = journal_mode.as_str();
+            // TODO(ryanfowler): Check the return value and match it againt val?
+            conn.pragma_update_and_check(None, "journal_mode", val, |_| Ok(()))?;
+        }
+
+        Ok(conn)
     }
 
     /// Invokes the provided function with a [`rusqlite::Connection`].

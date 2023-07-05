@@ -34,6 +34,7 @@ pub struct PoolBuilder {
     path: Option<PathBuf>,
     flags: OpenFlags,
     journal_mode: Option<JournalMode>,
+    vfs: Option<String>,
     num_conns: Option<usize>,
 }
 
@@ -67,6 +68,12 @@ impl PoolBuilder {
         self
     }
 
+    /// Specify the name of the [vfs](https://www.sqlite.org/vfs.html) to use.
+    pub fn vfs(mut self, vfs: &str) -> Self {
+        self.vfs = Some(vfs.to_owned());
+        self
+    }
+
     /// Specify the number of sqlite connections to open as part of the pool.
     ///
     /// Defaults to the number of logical CPUs of the current system.
@@ -93,6 +100,7 @@ impl PoolBuilder {
                 path: self.path.clone(),
                 flags: self.flags,
                 journal_mode: self.journal_mode,
+                vfs: self.vfs.clone(),
             }
             .open()
         });
