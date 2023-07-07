@@ -135,10 +135,10 @@ impl Client {
             }
         });
 
-        Ok(open_rx.await??)
+        open_rx.await?
     }
 
-    fn create_conn(mut builder: ClientBuilder) -> Result<Connection, rusqlite::Error> {
+    fn create_conn(mut builder: ClientBuilder) -> Result<Connection, Error> {
         let path = builder.path.take().unwrap_or_else(|| ":memory:".into());
         let conn = if let Some(vfs) = builder.vfs.take() {
             Connection::open_with_flags_and_vfs(path, builder.flags, &vfs)?
@@ -148,8 +148,15 @@ impl Client {
 
         if let Some(journal_mode) = builder.journal_mode.take() {
             let val = journal_mode.as_str();
-            // TODO(ryanfowler): Check the return value and match it againt val?
-            conn.pragma_update_and_check(None, "journal_mode", val, |_| Ok(()))?;
+            let out: String =
+                conn.pragma_update_and_check(None, "journal_mode", val, |row| row.get(0))?;
+            if !out.eq_ignore_ascii_case(val) {
+                return Err(Error::PragmaUpdate {
+                    name: "journal_mode",
+                    exp: val,
+                    got: out,
+                });
+            }
         }
 
         Ok(conn)

@@ -4,6 +4,12 @@
 pub enum Error {
     /// Indicates that the connection to the sqlite database is closed.
     Closed,
+    /// Error updating PRAGMA.
+    PragmaUpdate {
+        name: &'static str,
+        exp: &'static str,
+        got: String,
+    },
     /// Represents a [`rusqlite::Error`].
     Rusqlite(rusqlite::Error),
 }
@@ -21,6 +27,9 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Closed => write!(f, "connection to sqlite database closed"),
+            Error::PragmaUpdate { exp, got, name } => {
+                write!(f, "updating pragma {name}: expected '{exp}', got '{got}'")
+            }
             Error::Rusqlite(err) => err.fmt(f),
         }
     }
