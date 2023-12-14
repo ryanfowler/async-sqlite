@@ -84,7 +84,23 @@ impl ClientBuilder {
     /// # }
     /// ```
     pub async fn open(self) -> Result<Client, Error> {
-        Client::open(self).await
+        Client::open_async(self).await
+    }
+
+    /// Returns a new [`Client`] that uses the `ClientBuilder` configuration,
+    /// blocking the current thread.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use async_sqlite::ClientBuilder;
+    /// # fn run() -> Result<(), async_sqlite::Error> {
+    /// let client = ClientBuilder::new().open_blocking()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn open_blocking(self) -> Result<Client, Error> {
+        Client::open_blocking(self)
     }
 }
 
@@ -101,22 +117,39 @@ pub struct Client {
 }
 
 impl Client {
-    async fn open(builder: ClientBuilder) -> Result<Self, Error> {
+    async fn open_async(builder: ClientBuilder) -> Result<Self, Error> {
         let (open_tx, open_rx) = oneshot::channel();
+        Self::open(builder, |res| {
+            _ = open_tx.send(res);
+        });
+        open_rx.await?
+    }
 
+    fn open_blocking(builder: ClientBuilder) -> Result<Self, Error> {
+        let (conn_tx, conn_rx) = bounded(1);
+        Self::open(builder, move |res| {
+            _ = conn_tx.send(res);
+        });
+        conn_rx.recv()?
+    }
+
+    fn open<F>(builder: ClientBuilder, func: F)
+    where
+        F: FnOnce(Result<Self, Error>) + Send + 'static,
+    {
         thread::spawn(move || {
             let (conn_tx, conn_rx) = unbounded();
 
             let mut conn = match Client::create_conn(builder) {
                 Ok(conn) => conn,
                 Err(err) => {
-                    _ = open_tx.send(Err(err));
+                    func(Err(err));
                     return;
                 }
             };
 
             let client = Self { conn_tx };
-            _ = open_tx.send(Ok(client));
+            func(Ok(client));
 
             while let Ok(cmd) = conn_rx.recv() {
                 match cmd {
@@ -134,8 +167,6 @@ impl Client {
                 }
             }
         });
-
-        open_rx.await?
     }
 
     fn create_conn(mut builder: ClientBuilder) -> Result<Connection, Error> {
@@ -205,7 +236,7 @@ impl Client {
 
     /// Invokes the provided function with a [`rusqlite::Connection`], blocking
     /// the current thread until completion.
-    fn _conn_sync<F, T>(&self, func: F) -> Result<T, Error>
+    pub fn conn_blocking<F, T>(&self, func: F) -> Result<T, Error>
     where
         F: FnOnce(&Connection) -> Result<T, rusqlite::Error> + Send + 'static,
         T: Send + 'static,
@@ -219,7 +250,7 @@ impl Client {
 
     /// Invokes the provided function with a mutable [`rusqlite::Connection`],
     /// blocking the current thread until completion.
-    fn _conn_mut_sync<F, T>(&self, func: F) -> Result<T, Error>
+    pub fn conn_mut_blocking<F, T>(&self, func: F) -> Result<T, Error>
     where
         F: FnOnce(&mut Connection) -> Result<T, rusqlite::Error> + Send + 'static,
         T: Send + 'static,
@@ -234,9 +265,9 @@ impl Client {
     /// Closes the underlying sqlite connection, blocking the current thread
     /// until complete.
     ///
-    /// After this method returns, all calls to `self::conn_sync()` or
-    /// `self::conn_mut_sync()` will return an [`Error::Closed`] error.
-    fn _close_sync(&mut self) -> Result<(), Error> {
+    /// After this method returns, all calls to `self::conn_blocking()` or
+    /// `self::conn_mut_blocking()` will return an [`Error::Closed`] error.
+    pub fn close_blocking(&mut self) -> Result<(), Error> {
         let (tx, rx) = bounded(1);
         let func = Box::new(move |res| _ = tx.send(res));
         if self.conn_tx.send(Command::Shutdown(func)).is_err() {

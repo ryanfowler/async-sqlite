@@ -96,11 +96,7 @@ impl PoolBuilder {
     /// # }
     /// ```
     pub async fn open(self) -> Result<Pool, Error> {
-        let num_conns = self.num_conns.unwrap_or_else(|| {
-            available_parallelism()
-                .unwrap_or_else(|_| NonZeroUsize::new(1).unwrap())
-                .into()
-        });
+        let num_conns = self.get_num_conns();
         let opens = (0..num_conns).map(|_| {
             ClientBuilder {
                 path: self.path.clone(),
@@ -119,6 +115,47 @@ impl PoolBuilder {
                 clients,
                 counter: AtomicU64::new(0),
             }),
+        })
+    }
+
+    /// Returns a new [`Pool`] that uses the `PoolBuilder` configuration,
+    /// blocking the current thread.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use async_sqlite::PoolBuilder;
+    /// # fn run() -> Result<(), async_sqlite::Error> {
+    /// let pool = PoolBuilder::new().open_blocking()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn open_blocking(self) -> Result<Pool, Error> {
+        let num_conns = self.get_num_conns();
+        let clients = (0..num_conns)
+            .map(|_| {
+                ClientBuilder {
+                    path: self.path.clone(),
+                    flags: self.flags,
+                    journal_mode: self.journal_mode,
+                    vfs: self.vfs.clone(),
+                }
+                .open_blocking()
+            })
+            .collect::<Result<Vec<Client>, Error>>()?;
+        Ok(Pool {
+            state: Arc::new(State {
+                clients,
+                counter: AtomicU64::new(0),
+            }),
+        })
+    }
+
+    fn get_num_conns(&self) -> usize {
+        self.num_conns.unwrap_or_else(|| {
+            available_parallelism()
+                .unwrap_or_else(|_| NonZeroUsize::new(1).unwrap())
+                .into()
         })
     }
 }
@@ -169,6 +206,37 @@ impl Pool {
             .await
             .into_iter()
             .collect::<Result<(), Error>>()
+    }
+
+    /// Invokes the provided function with a [`rusqlite::Connection`], blocking
+    /// the current thread.
+    pub fn conn_blocking<F, T>(&self, func: F) -> Result<T, Error>
+    where
+        F: FnOnce(&Connection) -> Result<T, rusqlite::Error> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.get().conn_blocking(func)
+    }
+
+    /// Invokes the provided function with a mutable [`rusqlite::Connection`],
+    /// blocking the current thread.
+    pub fn conn_mut_blocking<F, T>(&self, func: F) -> Result<T, Error>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, rusqlite::Error> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.get().conn_mut_blocking(func)
+    }
+
+    /// Closes the underlying sqlite connections, blocking the current thread.
+    ///
+    /// After this method returns, all calls to `self::conn_blocking()` or
+    /// `self::conn_mut_blocking()` will return an [`Error::Closed`] error.
+    pub fn close_blocking(&mut self) -> Result<(), Error> {
+        self.state
+            .clients
+            .iter()
+            .try_for_each(|client| client.clone().close_blocking())
     }
 
     fn get(&self) -> &Client {
