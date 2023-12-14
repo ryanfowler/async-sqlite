@@ -1,9 +1,11 @@
 use std::{
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering::Relaxed},
         Arc,
     },
+    thread::available_parallelism,
 };
 
 use crate::{Client, ClientBuilder, Error, JournalMode};
@@ -94,7 +96,11 @@ impl PoolBuilder {
     /// # }
     /// ```
     pub async fn open(self) -> Result<Pool, Error> {
-        let num_conns = self.num_conns.unwrap_or_else(num_cpus::get);
+        let num_conns = self.num_conns.unwrap_or_else(|| {
+            available_parallelism()
+                .unwrap_or_else(|_| NonZeroUsize::new(1).unwrap())
+                .into()
+        });
         let opens = (0..num_conns).map(|_| {
             ClientBuilder {
                 path: self.path.clone(),
