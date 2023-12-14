@@ -39,9 +39,9 @@ vtab = ["rusqlite/vtab"]
 window = ["rusqlite/window"]
 
 [dependencies]
-crossbeam-channel = { version = "0.5.8" }
-futures-channel = { version = "0.3.28" }
-futures-util = { version = "0.3.28" }
+crossbeam-channel = { version = "0.5.9" }
+futures-channel = { version = "0.3.29" }
+futures-util = { version = "0.3.29" }
 rusqlite = { version = "0.30.0" }
 
 [dev-dependencies]
