@@ -196,12 +196,8 @@ impl Pool {
     ///
     /// After this method returns, all calls to `self::conn()` or
     /// `self::conn_mut()` will return an [`Error::Closed`] error.
-    pub async fn close(self) -> Result<(), Error> {
-        let futures = self
-            .state
-            .clients
-            .iter()
-            .map(|client| client.clone().close());
+    pub async fn close(&self) -> Result<(), Error> {
+        let futures = self.state.clients.iter().map(|client| client.close());
         join_all(futures)
             .await
             .into_iter()
@@ -232,7 +228,7 @@ impl Pool {
     ///
     /// After this method returns, all calls to `self::conn_blocking()` or
     /// `self::conn_mut_blocking()` will return an [`Error::Closed`] error.
-    pub fn close_blocking(&mut self) -> Result<(), Error> {
+    pub fn close_blocking(&self) -> Result<(), Error> {
         self.state
             .clients
             .iter()

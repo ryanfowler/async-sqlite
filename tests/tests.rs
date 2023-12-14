@@ -3,7 +3,7 @@ use async_sqlite::{ClientBuilder, Error, JournalMode, PoolBuilder};
 #[test]
 fn test_blocking_client() {
     let tmp_dir = tempfile::tempdir().unwrap();
-    let mut client = ClientBuilder::new()
+    let client = ClientBuilder::new()
         .journal_mode(JournalMode::Wal)
         .path(tmp_dir.path().join("sqlite.db"))
         .open_blocking()
@@ -34,7 +34,7 @@ fn test_blocking_client() {
 #[test]
 fn test_blocking_pool() {
     let tmp_dir = tempfile::tempdir().unwrap();
-    let mut pool = PoolBuilder::new()
+    let pool = PoolBuilder::new()
         .journal_mode(JournalMode::Wal)
         .path(tmp_dir.path().join("sqlite.db"))
         .open_blocking()
