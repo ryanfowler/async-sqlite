@@ -223,7 +223,7 @@ impl Client {
     ///
     /// After this method returns, all calls to `self::conn()` or
     /// `self::conn_mut()` will return an [`Error::Closed`] error.
-    pub async fn close(self) -> Result<(), Error> {
+    pub async fn close(&self) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
         let func = Box::new(|res| _ = tx.send(res));
         if self.conn_tx.send(Command::Shutdown(func)).is_err() {
@@ -267,7 +267,7 @@ impl Client {
     ///
     /// After this method returns, all calls to `self::conn_blocking()` or
     /// `self::conn_mut_blocking()` will return an [`Error::Closed`] error.
-    pub fn close_blocking(&mut self) -> Result<(), Error> {
+    pub fn close_blocking(&self) -> Result<(), Error> {
         let (tx, rx) = bounded(1);
         let func = Box::new(move |res| _ = tx.send(res));
         if self.conn_tx.send(Command::Shutdown(func)).is_err() {
