@@ -1,5 +1,65 @@
 use async_sqlite::{ClientBuilder, Error, JournalMode, PoolBuilder};
 
+#[test]
+fn test_blocking_client() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let mut client = ClientBuilder::new()
+        .journal_mode(JournalMode::Wal)
+        .path(tmp_dir.path().join("sqlite.db"))
+        .open_blocking()
+        .expect("client unable to be opened");
+
+    client
+        .conn_blocking(|conn| {
+            conn.execute(
+                "CREATE TABLE testing (id INTEGER PRIMARY KEY, val TEXT NOT NULL)",
+                (),
+            )?;
+            conn.execute("INSERT INTO testing VALUES (1, ?)", ["value1"])
+        })
+        .expect("writing schema and seed data");
+
+    client
+        .conn_blocking(|conn| {
+            let val: String =
+                conn.query_row("SELECT val FROM testing WHERE id=?", [1], |row| row.get(0))?;
+            assert_eq!(val, "value1");
+            Ok(())
+        })
+        .expect("querying for result");
+
+    client.close_blocking().expect("closing client conn");
+}
+
+#[test]
+fn test_blocking_pool() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let mut pool = PoolBuilder::new()
+        .journal_mode(JournalMode::Wal)
+        .path(tmp_dir.path().join("sqlite.db"))
+        .open_blocking()
+        .expect("client unable to be opened");
+
+    pool.conn_blocking(|conn| {
+        conn.execute(
+            "CREATE TABLE testing (id INTEGER PRIMARY KEY, val TEXT NOT NULL)",
+            (),
+        )?;
+        conn.execute("INSERT INTO testing VALUES (1, ?)", ["value1"])
+    })
+    .expect("writing schema and seed data");
+
+    pool.conn_blocking(|conn| {
+        let val: String =
+            conn.query_row("SELECT val FROM testing WHERE id=?", [1], |row| row.get(0))?;
+        assert_eq!(val, "value1");
+        Ok(())
+    })
+    .expect("querying for result");
+
+    pool.close_blocking().expect("closing client conn");
+}
+
 macro_rules! async_test {
     ($name:ident) => {
         paste::item! {
