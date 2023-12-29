@@ -197,11 +197,10 @@ impl Pool {
     /// After this method returns, all calls to `self::conn()` or
     /// `self::conn_mut()` will return an [`Error::Closed`] error.
     pub async fn close(&self) -> Result<(), Error> {
-        let futures = self.state.clients.iter().map(|client| client.close());
-        join_all(futures)
-            .await
-            .into_iter()
-            .collect::<Result<(), Error>>()
+        for client in self.state.clients.iter() {
+            client.close().await?;
+        }
+        Ok(())
     }
 
     /// Invokes the provided function with a [`rusqlite::Connection`], blocking
@@ -232,7 +231,7 @@ impl Pool {
         self.state
             .clients
             .iter()
-            .try_for_each(|client| client.clone().close_blocking())
+            .try_for_each(|client| client.close_blocking())
     }
 
     fn get(&self) -> &Client {
