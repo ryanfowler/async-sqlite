@@ -230,7 +230,7 @@ impl Client {
             // If the worker thread has already shut down, return Ok here.
             return Ok(());
         }
-        // If receiving fails, the
+        // If receiving fails, the connection is already closed.
         rx.await.unwrap_or(Ok(()))
     }
 
@@ -273,6 +273,7 @@ impl Client {
         if self.conn_tx.send(Command::Shutdown(func)).is_err() {
             return Ok(());
         }
+        // If receiving fails, the connection is already closed.
         rx.recv().unwrap_or(Ok(()))
     }
 }
