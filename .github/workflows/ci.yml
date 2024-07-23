@@ -2,30 +2,30 @@ name: Continuous Integration
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
-  RUST_VERSION: "1.72.0"
+  RUST_VERSION: "1.79.0"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v2
+      - uses: actions/checkout@v2
 
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@master
-      with:
-        toolchain: ${{ env.RUST_VERSION }}
-        components: clippy, rustfmt
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy, rustfmt
 
-    - name: Format
-      run: cargo fmt --all -- --check
+      - name: Format
+        run: cargo fmt --all -- --check
 
-    - name: Clippy
-      run: cargo clippy -- -D warnings
+      - name: Clippy
+        run: cargo clippy -- -D warnings
 
-    - name: Test
-      run: cargo test
+      - name: Test
+        run: cargo test
