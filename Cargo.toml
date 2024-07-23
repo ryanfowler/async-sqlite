@@ -1,6 +1,6 @@
 [package]
 name = "async-sqlite"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Ryan Fowler"]
 edition = "2021"
 license = "MIT"
@@ -18,7 +18,9 @@ blob = ["rusqlite/blob"]
 bundled = ["rusqlite/bundled"]
 bundled-full = ["rusqlite/bundled-full"]
 bundled-sqlcipher = ["rusqlite/bundled-sqlcipher"]
-bundled-sqlcipher-vendored-openssl = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
+bundled-sqlcipher-vendored-openssl = [
+    "rusqlite/bundled-sqlcipher-vendored-openssl",
+]
 chrono = ["rusqlite/chrono"]
 column_decltype = ["rusqlite/column_decltype"]
 csv = ["rusqlite/csv"]
