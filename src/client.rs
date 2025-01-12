@@ -219,6 +219,44 @@ impl Client {
         Ok(rx.await??)
     }
 
+    /// Invokes the provided function with a [`rusqlite::Connection`].
+    ///
+    /// Maps the result error type to a custom error; designed to be
+    /// used in conjunction with [`query_and_then`](https://docs.rs/rusqlite/latest/rusqlite/struct.CachedStatement.html#method.query_and_then).
+    pub async fn conn_and_then<F, T, E>(&self, func: F) -> Result<T, E>
+    where
+        F: FnOnce(&Connection) -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: From<rusqlite::Error> + From<Error> + Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        self.conn_tx
+            .send(Command::Func(Box::new(move |conn| {
+                _ = tx.send(func(conn));
+            })))
+            .map_err(Error::from)?;
+        Ok(rx.await.map_err(Error::from)??)
+    }
+
+    /// Invokes the provided function with a mutable [`rusqlite::Connection`].
+    ///
+    /// Maps the result error type to a custom error; designed to be
+    /// used in conjunction with [`query_and_then`](https://docs.rs/rusqlite/latest/rusqlite/struct.CachedStatement.html#method.query_and_then).
+    pub async fn conn_mut_and_then<F, T, E>(&self, func: F) -> Result<T, E>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: From<rusqlite::Error> + From<Error> + Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        self.conn_tx
+            .send(Command::Func(Box::new(move |conn| {
+                _ = tx.send(func(conn));
+            })))
+            .map_err(Error::from)?;
+        Ok(rx.await.map_err(Error::from)??)
+    }
+
     /// Closes the underlying sqlite connection.
     ///
     /// After this method returns, all calls to `self::conn()` or
