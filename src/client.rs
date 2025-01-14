@@ -235,7 +235,7 @@ impl Client {
                 _ = tx.send(func(conn));
             })))
             .map_err(Error::from)?;
-        Ok(rx.await.map_err(Error::from)??)
+        rx.await.map_err(Error::from)?
     }
 
     /// Invokes the provided function with a mutable [`rusqlite::Connection`].
@@ -254,7 +254,7 @@ impl Client {
                 _ = tx.send(func(conn));
             })))
             .map_err(Error::from)?;
-        Ok(rx.await.map_err(Error::from)??)
+        rx.await.map_err(Error::from)?
     }
 
     /// Closes the underlying sqlite connection.
