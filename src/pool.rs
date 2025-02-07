@@ -238,4 +238,37 @@ impl Pool {
         let n = self.state.counter.fetch_add(1, Relaxed);
         &self.state.clients[n as usize % self.state.clients.len()]
     }
+
+    /// Runs a function on all connections in the pool asynchronously.
+    ///
+    /// The function is executed on each connection concurrently.
+    pub async fn conn_for_each<F, T>(&self, func: F) -> Vec<Result<T, Error>>
+    where
+        F: Fn(&Connection) -> Result<T, rusqlite::Error> + Send + Sync + 'static,
+        T: Send + 'static,
+    {
+        let func = Arc::new(func);
+        let futures = self.state.clients.iter().map(|client| {
+            let func = func.clone();
+            async move { client.conn(move |conn| func(conn)).await }
+        });
+        join_all(futures).await
+    }
+
+    /// Runs a function on all connections in the pool, blocking the current thread.
+    pub fn conn_for_each_blocking<F, T>(&self, func: F) -> Vec<Result<T, Error>>
+    where
+        F: Fn(&Connection) -> Result<T, rusqlite::Error> + Send + Sync + 'static,
+        T: Send + 'static,
+    {
+        let func = Arc::new(func);
+        self.state
+            .clients
+            .iter()
+            .map(|client| {
+                let func = func.clone();
+                client.conn_blocking(move |conn| func(conn))
+            })
+            .collect()
+    }
 }
