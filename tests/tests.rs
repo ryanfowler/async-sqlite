@@ -1,5 +1,3 @@
-use std::env::temp_dir;
-
 use async_sqlite::{ClientBuilder, Error, JournalMode, PoolBuilder};
 
 #[test]
