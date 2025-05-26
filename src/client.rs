@@ -172,7 +172,7 @@ impl Client {
     fn create_conn(mut builder: ClientBuilder) -> Result<Connection, Error> {
         let path = builder.path.take().unwrap_or_else(|| ":memory:".into());
         let conn = if let Some(vfs) = builder.vfs.take() {
-            Connection::open_with_flags_and_vfs(path, builder.flags, &vfs)?
+            Connection::open_with_flags_and_vfs(path, builder.flags, vfs.as_str())?
         } else {
             Connection::open_with_flags(path, builder.flags)?
         };
