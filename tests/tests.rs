@@ -84,6 +84,8 @@ async_test!(test_journal_mode);
 async_test!(test_concurrency);
 async_test!(test_pool);
 async_test!(test_pool_conn_for_each);
+async_test!(test_pool_close_concurrent);
+async_test!(test_pool_num_conns_zero_clamps);
 
 async fn test_journal_mode() {
     let tmp_dir = tempfile::tempdir().unwrap();
@@ -226,4 +228,37 @@ async fn test_pool_conn_for_each() {
 
     // cleanup
     pool.close().await.expect("closing client conn");
+}
+
+async fn test_pool_close_concurrent() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let pool = PoolBuilder::new()
+        .path(tmp_dir.path().join("sqlite.db"))
+        .num_conns(2)
+        .open()
+        .await
+        .expect("pool unable to be opened");
+
+    let c1 = pool.close();
+    let c2 = pool.close();
+    futures_util::future::join_all([c1, c2])
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, Error>>()
+        .expect("closing concurrently");
+
+    let res = pool.conn(|c| c.execute("SELECT 1", ())).await;
+    assert!(matches!(res, Err(Error::Closed)));
+}
+
+async fn test_pool_num_conns_zero_clamps() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let pool = PoolBuilder::new()
+        .path(tmp_dir.path().join("clamp.db"))
+        .num_conns(0)
+        .open()
+        .await
+        .expect("pool unable to be opened");
+    let results = pool.conn_for_each(|_| Ok(())).await;
+    assert_eq!(results.len(), 1);
 }

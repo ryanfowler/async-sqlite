@@ -78,9 +78,16 @@ impl PoolBuilder {
 
     /// Specify the number of sqlite connections to open as part of the pool.
     ///
-    /// Defaults to the number of logical CPUs of the current system.
+    /// Defaults to the number of logical CPUs of the current system. Values
+    /// less than `1` are clamped to `1`.
+    ///
+    /// ```
+    /// use async_sqlite::PoolBuilder;
+    ///
+    /// let builder = PoolBuilder::new().num_conns(2);
+    /// ```
     pub fn num_conns(mut self, num_conns: usize) -> Self {
-        self.num_conns = Some(num_conns);
+        self.num_conns = Some(num_conns.max(1));
         self
     }
 
@@ -197,9 +204,9 @@ impl Pool {
     /// After this method returns, all calls to `self::conn()` or
     /// `self::conn_mut()` will return an [`Error::Closed`] error.
     pub async fn close(&self) -> Result<(), Error> {
-        for client in self.state.clients.iter() {
-            client.close().await?;
-        }
+        let closes = self.state.clients.iter().map(|client| client.close());
+        let res = join_all(closes).await;
+        res.into_iter().collect::<Result<Vec<_>, Error>>()?;
         Ok(())
     }
 
