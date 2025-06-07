@@ -204,9 +204,9 @@ impl Pool {
     /// After this method returns, all calls to `self::conn()` or
     /// `self::conn_mut()` will return an [`Error::Closed`] error.
     pub async fn close(&self) -> Result<(), Error> {
-        for client in self.state.clients.iter() {
-            client.close().await?;
-        }
+        let closes = self.state.clients.iter().map(|client| client.close());
+        let res = join_all(closes).await;
+        res.into_iter().collect::<Result<Vec<_>, Error>>()?;
         Ok(())
     }
 
