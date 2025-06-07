@@ -78,9 +78,16 @@ impl PoolBuilder {
 
     /// Specify the number of sqlite connections to open as part of the pool.
     ///
-    /// Defaults to the number of logical CPUs of the current system.
+    /// Defaults to the number of logical CPUs of the current system. Values
+    /// less than `1` are clamped to `1`.
+    ///
+    /// ```
+    /// use async_sqlite::PoolBuilder;
+    ///
+    /// let builder = PoolBuilder::new().num_conns(2);
+    /// ```
     pub fn num_conns(mut self, num_conns: usize) -> Self {
-        self.num_conns = Some(num_conns);
+        self.num_conns = Some(num_conns.max(1));
         self
     }
 
