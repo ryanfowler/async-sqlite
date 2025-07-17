@@ -1,6 +1,6 @@
 [package]
 name = "async-sqlite"
-version = "0.5.2"
+version = "0.5.3"
 authors = ["Ryan Fowler"]
 edition = "2021"
 license = "MIT"
