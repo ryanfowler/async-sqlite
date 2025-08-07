@@ -7,5 +7,3 @@ updates:
     time: "06:00"
     timezone: "America/Vancouver"
   open-pull-requests-limit: 10
-  reviewers:
-  - ryanfowler
