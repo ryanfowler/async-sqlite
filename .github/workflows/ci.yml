@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 env:
-  RUST_VERSION: "1.84.1"
+  RUST_VERSION: "1.92.0"
 
 jobs:
   build:
