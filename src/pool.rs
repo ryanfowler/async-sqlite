@@ -235,10 +235,18 @@ impl Pool {
     /// After this method returns, all calls to `self::conn_blocking()` or
     /// `self::conn_mut_blocking()` will return an [`Error::Closed`] error.
     pub fn close_blocking(&self) -> Result<(), Error> {
-        self.state
-            .clients
-            .iter()
-            .try_for_each(|client| client.close_blocking())
+        let mut first_err = None;
+        for client in self.state.clients.iter() {
+            if let Err(e) = client.close_blocking() {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     fn get(&self) -> &Client {
