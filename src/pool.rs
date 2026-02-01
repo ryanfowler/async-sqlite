@@ -104,19 +104,38 @@ impl PoolBuilder {
     /// ```
     pub async fn open(self) -> Result<Pool, Error> {
         let num_conns = self.get_num_conns();
-        let opens = (0..num_conns).map(|_| {
+
+        // Open the first connection with full config (including journal_mode).
+        // This must complete before opening remaining connections to avoid
+        // concurrent PRAGMA writes on a new database file.
+        let first = ClientBuilder {
+            path: self.path.clone(),
+            flags: self.flags,
+            journal_mode: self.journal_mode,
+            vfs: self.vfs.clone(),
+        }
+        .open()
+        .await?;
+
+        // Open remaining connections without journal_mode since it's a
+        // database-level setting already applied by the first connection.
+        let opens = (1..num_conns).map(|_| {
             ClientBuilder {
                 path: self.path.clone(),
                 flags: self.flags,
-                journal_mode: self.journal_mode,
+                journal_mode: None,
                 vfs: self.vfs.clone(),
             }
             .open()
         });
-        let clients = join_all(opens)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<Client>, Error>>()?;
+        let mut clients = vec![first];
+        clients.extend(
+            join_all(opens)
+                .await
+                .into_iter()
+                .collect::<Result<Vec<Client>, Error>>()?,
+        );
+
         Ok(Pool {
             state: Arc::new(State {
                 clients,
@@ -139,17 +158,33 @@ impl PoolBuilder {
     /// ```
     pub fn open_blocking(self) -> Result<Pool, Error> {
         let num_conns = self.get_num_conns();
-        let clients = (0..num_conns)
-            .map(|_| {
-                ClientBuilder {
-                    path: self.path.clone(),
-                    flags: self.flags,
-                    journal_mode: self.journal_mode,
-                    vfs: self.vfs.clone(),
-                }
-                .open_blocking()
-            })
-            .collect::<Result<Vec<Client>, Error>>()?;
+
+        // Open the first connection with full config (including journal_mode).
+        let first = ClientBuilder {
+            path: self.path.clone(),
+            flags: self.flags,
+            journal_mode: self.journal_mode,
+            vfs: self.vfs.clone(),
+        }
+        .open_blocking()?;
+
+        // Open remaining connections without journal_mode since it's a
+        // database-level setting already applied by the first connection.
+        let mut clients = vec![first];
+        clients.extend(
+            (1..num_conns)
+                .map(|_| {
+                    ClientBuilder {
+                        path: self.path.clone(),
+                        flags: self.flags,
+                        journal_mode: None,
+                        vfs: self.vfs.clone(),
+                    }
+                    .open_blocking()
+                })
+                .collect::<Result<Vec<Client>, Error>>()?,
+        );
+
         Ok(Pool {
             state: Arc::new(State {
                 clients,
