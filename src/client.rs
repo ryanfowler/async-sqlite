@@ -153,7 +153,11 @@ impl Client {
 
             while let Ok(cmd) = conn_rx.recv() {
                 match cmd {
-                    Command::Func(func) => func(&mut conn),
+                    Command::Func(func) => {
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            func(&mut conn);
+                        }));
+                    }
                     Command::Shutdown(func) => match conn.close() {
                         Ok(()) => {
                             func(Ok(()));
