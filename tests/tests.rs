@@ -206,7 +206,10 @@ async fn test_pool_conn_for_each() {
         )
     };
     // attach to the dummy db via conn_for_each
-    pool.conn_for_each(attach_fn).await;
+    let results = pool.conn_for_each(attach_fn).await;
+    for result in results {
+        result.unwrap();
+    }
 
     // check that the dummy db is attached
     fn check_fn(conn: &rusqlite::Connection) -> Result<Vec<String>, rusqlite::Error> {
