@@ -1,5 +1,8 @@
 # async-sqlite
 
+[![Crates.io](https://img.shields.io/crates/v/async-sqlite)](https://crates.io/crates/async-sqlite)
+[![docs.rs](https://img.shields.io/docsrs/async-sqlite)](https://docs.rs/async-sqlite)
+
 A library to interact with sqlite from an async context.
 
 This library is tested on both [tokio](https://docs.rs/tokio/latest/tokio/)
