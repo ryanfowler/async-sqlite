@@ -83,6 +83,7 @@ macro_rules! async_test {
 async_test!(test_journal_mode);
 async_test!(test_concurrency);
 async_test!(test_pool);
+async_test!(test_pool_journal_mode);
 async_test!(test_pool_conn_for_each);
 async_test!(test_pool_close_concurrent);
 async_test!(test_pool_num_conns_zero_clamps);
@@ -168,6 +169,28 @@ async fn test_pool() {
         .into_iter()
         .collect::<Result<(), Error>>()
         .expect("collecting query results");
+}
+
+async fn test_pool_journal_mode() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let pool = PoolBuilder::new()
+        .journal_mode(JournalMode::Wal)
+        .path(tmp_dir.path().join("sqlite.db"))
+        .num_conns(4)
+        .open()
+        .await
+        .expect("pool unable to be opened");
+
+    // Verify all connections see WAL journal mode.
+    let results = pool
+        .conn_for_each(|conn| conn.query_row("PRAGMA journal_mode", (), |row| row.get(0)))
+        .await;
+    for result in results {
+        let mode: String = result.unwrap();
+        assert_eq!(mode, "wal");
+    }
+
+    pool.close().await.expect("closing pool");
 }
 
 async fn test_pool_conn_for_each() {
