@@ -6,7 +6,7 @@
 A library to interact with sqlite from an async context.
 
 This library is tested on both [tokio](https://docs.rs/tokio/latest/tokio/)
-and [async_std](https://docs.rs/async-std/latest/async_std/), however
+and [smol](https://docs.rs/smol/latest/smol/), however
 it should be compatible with all async runtimes.
 
 ## Install

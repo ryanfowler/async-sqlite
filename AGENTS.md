@@ -4,7 +4,7 @@ This file provides guidance to AI agents when working with code in this reposito
 
 ## Project Overview
 
-async-sqlite is a Rust library providing an asynchronous, runtime-agnostic wrapper around SQLite via `rusqlite`. It works with any async runtime (tokio, async-std, etc.) by using background threads internally rather than depending on a specific runtime.
+async-sqlite is a Rust library providing an asynchronous, runtime-agnostic wrapper around SQLite via `rusqlite`. It works with any async runtime (tokio, smol, etc.) by using background threads internally rather than depending on a specific runtime.
 
 ## Build Commands
 
@@ -40,4 +40,4 @@ All Cargo features are pass-through to `rusqlite`. The `bundled` feature (defaul
 
 ## Testing
 
-Tests in `tests/tests.rs` use a `async_test!` macro that generates two variants of each async test: one running on tokio and one on async-std. This ensures runtime compatibility. Tests use `tempfile` for temporary database files.
+Tests in `tests/tests.rs` use a `async_test!` macro that generates two variants of each async test: one running on tokio and one on smol. This ensures runtime compatibility. Tests use `tempfile` for temporary database files.
