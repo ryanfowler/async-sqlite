@@ -64,8 +64,8 @@ macro_rules! async_test {
     ($name:ident) => {
         paste::item! {
             #[::core::prelude::v1::test]
-            fn [< $name _async_std >] () {
-                ::async_std::task::block_on($name());
+            fn [< $name _smol >] () {
+                ::smol::block_on($name());
             }
 
             #[::core::prelude::v1::test]
