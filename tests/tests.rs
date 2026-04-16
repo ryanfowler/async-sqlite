@@ -87,6 +87,7 @@ async_test!(test_pool_journal_mode);
 async_test!(test_pool_conn_for_each);
 async_test!(test_pool_close_concurrent);
 async_test!(test_pool_num_conns_zero_clamps);
+async_test!(test_closure_panic_surfaces_error);
 
 async fn test_journal_mode() {
     let tmp_dir = tempfile::tempdir().unwrap();
@@ -275,6 +276,37 @@ async fn test_pool_close_concurrent() {
 
     let res = pool.conn(|c| c.execute("SELECT 1", ())).await;
     assert!(matches!(res, Err(Error::Closed)));
+}
+
+async fn test_closure_panic_surfaces_error() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let client = ClientBuilder::new()
+        .path(tmp_dir.path().join("sqlite.db"))
+        .open()
+        .await
+        .expect("client unable to be opened");
+
+    let res: Result<(), Error> = client.conn(|_| panic!("boom: &str")).await;
+    match res {
+        Err(Error::Panic { message }) => assert!(message.contains("boom"), "got {message}"),
+        other => panic!("expected Error::Panic, got {other:?}"),
+    }
+
+    let res: Result<(), Error> = client
+        .conn(|_| panic!("{}", String::from("boom: String")))
+        .await;
+    match res {
+        Err(Error::Panic { message }) => assert!(message.contains("boom"), "got {message}"),
+        other => panic!("expected Error::Panic, got {other:?}"),
+    }
+
+    // Connection must remain usable after a panic.
+    client
+        .conn(|conn| conn.query_row("SELECT 1", (), |row| row.get::<_, i64>(0)))
+        .await
+        .expect("connection still usable after panic");
+
+    client.close().await.expect("closing client");
 }
 
 async fn test_pool_num_conns_zero_clamps() {
