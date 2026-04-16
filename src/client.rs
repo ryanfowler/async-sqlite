@@ -109,6 +109,41 @@ enum Command {
     Shutdown(Box<dyn FnOnce(Result<(), Error>) + Send>),
 }
 
+fn run_catching<F, T>(func: F) -> Result<T, Error>
+where
+    F: FnOnce() -> Result<T, rusqlite::Error>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(func)) {
+        Ok(res) => res.map_err(Error::from),
+        Err(p) => Err(Error::Panic {
+            message: panic_message(&*p),
+        }),
+    }
+}
+
+fn run_catching_and_then<F, T, E>(func: F) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<Error>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(func)) {
+        Ok(res) => res,
+        Err(p) => Err(E::from(Error::Panic {
+            message: panic_message(&*p),
+        })),
+    }
+}
+
+fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = p.downcast_ref::<&'static str>() {
+        (*s).to_owned()
+    } else if let Some(s) = p.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "panic".to_owned()
+    }
+}
+
 /// Client represents a single sqlite connection that can be used from async
 /// contexts.
 #[derive(Clone)]
@@ -153,11 +188,7 @@ impl Client {
 
             while let Ok(cmd) = conn_rx.recv() {
                 match cmd {
-                    Command::Func(func) => {
-                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            func(&mut conn);
-                        }));
-                    }
+                    Command::Func(func) => func(&mut conn),
                     Command::Shutdown(func) => match conn.close() {
                         Ok(()) => {
                             func(Ok(()));
@@ -205,9 +236,9 @@ impl Client {
     {
         let (tx, rx) = oneshot::channel();
         self.conn_tx.send(Command::Func(Box::new(move |conn| {
-            _ = tx.send(func(conn));
+            _ = tx.send(run_catching(|| func(conn)));
         })))?;
-        Ok(rx.await??)
+        rx.await?
     }
 
     /// Invokes the provided function with a mutable [`rusqlite::Connection`].
@@ -218,9 +249,9 @@ impl Client {
     {
         let (tx, rx) = oneshot::channel();
         self.conn_tx.send(Command::Func(Box::new(move |conn| {
-            _ = tx.send(func(conn));
+            _ = tx.send(run_catching(|| func(conn)));
         })))?;
-        Ok(rx.await??)
+        rx.await?
     }
 
     /// Invokes the provided function with a [`rusqlite::Connection`].
@@ -236,7 +267,7 @@ impl Client {
         let (tx, rx) = oneshot::channel();
         self.conn_tx
             .send(Command::Func(Box::new(move |conn| {
-                _ = tx.send(func(conn));
+                _ = tx.send(run_catching_and_then(|| func(conn)));
             })))
             .map_err(Error::from)?;
         rx.await.map_err(Error::from)?
@@ -255,7 +286,7 @@ impl Client {
         let (tx, rx) = oneshot::channel();
         self.conn_tx
             .send(Command::Func(Box::new(move |conn| {
-                _ = tx.send(func(conn));
+                _ = tx.send(run_catching_and_then(|| func(conn)));
             })))
             .map_err(Error::from)?;
         rx.await.map_err(Error::from)?
@@ -285,9 +316,9 @@ impl Client {
     {
         let (tx, rx) = bounded(1);
         self.conn_tx.send(Command::Func(Box::new(move |conn| {
-            _ = tx.send(func(conn));
+            _ = tx.send(run_catching(|| func(conn)));
         })))?;
-        Ok(rx.recv()??)
+        rx.recv()?
     }
 
     /// Invokes the provided function with a mutable [`rusqlite::Connection`],
@@ -299,9 +330,9 @@ impl Client {
     {
         let (tx, rx) = bounded(1);
         self.conn_tx.send(Command::Func(Box::new(move |conn| {
-            _ = tx.send(func(conn));
+            _ = tx.send(run_catching(|| func(conn)));
         })))?;
-        Ok(rx.recv()??)
+        rx.recv()?
     }
 
     /// Closes the underlying sqlite connection, blocking the current thread

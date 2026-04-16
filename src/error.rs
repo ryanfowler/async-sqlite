@@ -12,6 +12,8 @@ pub enum Error {
     },
     /// Represents a [`rusqlite::Error`].
     Rusqlite(rusqlite::Error),
+    /// A user-provided closure panicked while being executed on the worker thread.
+    Panic { message: String },
 }
 
 impl std::error::Error for Error {
@@ -31,6 +33,7 @@ impl std::fmt::Display for Error {
                 write!(f, "updating pragma {name}: expected '{exp}', got '{got}'")
             }
             Error::Rusqlite(err) => err.fmt(f),
+            Error::Panic { message } => write!(f, "user closure panicked: {message}"),
         }
     }
 }
