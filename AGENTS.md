@@ -20,7 +20,7 @@ To run a single test:
 cargo test <test_name>         # e.g., cargo test test_blocking_client
 ```
 
-The minimum supported Rust version is 1.92.0.
+The minimum supported Rust version is 1.95.0.
 
 ## Architecture
 
