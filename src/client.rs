@@ -5,7 +5,7 @@ use std::{
 
 use crate::Error;
 
-use crossbeam_channel::{bounded, unbounded, Sender};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender, TrySendError};
 use futures_channel::oneshot;
 use rusqlite::{Connection, OpenFlags};
 
@@ -34,6 +34,7 @@ pub struct ClientBuilder {
     pub(crate) flags: OpenFlags,
     pub(crate) journal_mode: Option<JournalMode>,
     pub(crate) vfs: Option<String>,
+    pub(crate) queue_capacity: Option<usize>,
 }
 
 impl ClientBuilder {
@@ -72,6 +73,17 @@ impl ClientBuilder {
         self
     }
 
+    /// Limit the number of commands that may wait in the worker queue.
+    ///
+    /// By default, the queue is unbounded. If a capacity is configured, calls
+    /// return [`Error::QueueFull`] when that many commands are already waiting
+    /// for the worker thread. A capacity of `0` allows a command to be accepted
+    /// only when the worker is ready to receive it immediately.
+    pub fn queue_capacity(mut self, queue_capacity: usize) -> Self {
+        self.queue_capacity = Some(queue_capacity);
+        self
+    }
+
     /// Returns a new [`Client`] that uses the `ClientBuilder` configuration.
     ///
     /// # Examples
@@ -105,8 +117,88 @@ impl ClientBuilder {
 }
 
 enum Command {
-    Func(Box<dyn FnOnce(&mut Connection) + Send>),
-    Shutdown(Box<dyn FnOnce(Result<(), Error>) + Send>),
+    Func(Box<dyn QueuedFunc>),
+    Shutdown(Box<dyn QueuedShutdown>),
+}
+
+trait QueuedFunc: Send {
+    fn is_canceled(&self) -> bool;
+    fn execute(self: Box<Self>, conn: &mut Connection);
+}
+
+struct AsyncFunc<F, T, E> {
+    tx: oneshot::Sender<Result<T, E>>,
+    func: F,
+}
+
+impl<F, T, E> QueuedFunc for AsyncFunc<F, T, E>
+where
+    F: FnOnce(&mut Connection) -> Result<T, E> + Send + 'static,
+    T: Send + 'static,
+    E: Send + 'static,
+{
+    fn is_canceled(&self) -> bool {
+        self.tx.is_canceled()
+    }
+
+    fn execute(self: Box<Self>, conn: &mut Connection) {
+        let Self { tx, func } = *self;
+        _ = tx.send(func(conn));
+    }
+}
+
+struct BlockingFunc<F, T, E> {
+    tx: Sender<Result<T, E>>,
+    func: F,
+}
+
+impl<F, T, E> QueuedFunc for BlockingFunc<F, T, E>
+where
+    F: FnOnce(&mut Connection) -> Result<T, E> + Send + 'static,
+    T: Send + 'static,
+    E: Send + 'static,
+{
+    fn is_canceled(&self) -> bool {
+        false
+    }
+
+    fn execute(self: Box<Self>, conn: &mut Connection) {
+        let Self { tx, func } = *self;
+        _ = tx.send(func(conn));
+    }
+}
+
+trait QueuedShutdown: Send {
+    fn is_canceled(&self) -> bool;
+    fn respond(self: Box<Self>, res: Result<(), Error>);
+}
+
+struct AsyncShutdown {
+    tx: oneshot::Sender<Result<(), Error>>,
+}
+
+impl QueuedShutdown for AsyncShutdown {
+    fn is_canceled(&self) -> bool {
+        self.tx.is_canceled()
+    }
+
+    fn respond(self: Box<Self>, res: Result<(), Error>) {
+        _ = self.tx.send(res);
+    }
+}
+
+struct BlockingShutdown {
+    tx: Sender<Result<(), Error>>,
+}
+
+impl QueuedShutdown for BlockingShutdown {
+    fn is_canceled(&self) -> bool {
+        false
+    }
+
+    fn respond(self: Box<Self>, res: Result<(), Error>) {
+        _ = self.tx.send(res);
+    }
 }
 
 fn run_catching<F, T>(conn: &mut Connection, func: F) -> Result<T, Error>
@@ -185,7 +277,10 @@ impl Client {
         F: FnOnce(Result<Self, Error>) + Send + 'static,
     {
         thread::spawn(move || {
-            let (conn_tx, conn_rx) = unbounded();
+            let (conn_tx, conn_rx) = match builder.queue_capacity {
+                Some(queue_capacity) => bounded(queue_capacity),
+                None => unbounded(),
+            };
 
             let mut conn = match Client::create_conn(builder) {
                 Ok(conn) => conn,
@@ -200,17 +295,25 @@ impl Client {
 
             while let Ok(cmd) = conn_rx.recv() {
                 match cmd {
-                    Command::Func(func) => func(&mut conn),
-                    Command::Shutdown(func) => match conn.close() {
-                        Ok(()) => {
-                            func(Ok(()));
-                            return;
+                    Command::Func(func) => {
+                        if !func.is_canceled() {
+                            func.execute(&mut conn);
                         }
-                        Err((c, e)) => {
-                            conn = c;
-                            func(Err(e.into()));
+                    }
+                    Command::Shutdown(func) => {
+                        if !func.is_canceled() {
+                            match conn.close() {
+                                Ok(()) => {
+                                    func.respond(Ok(()));
+                                    return;
+                                }
+                                Err((c, e)) => {
+                                    conn = c;
+                                    func.respond(Err(e.into()));
+                                }
+                            }
                         }
-                    },
+                    }
                 }
             }
         });
@@ -240,16 +343,45 @@ impl Client {
         Ok(conn)
     }
 
+    fn enqueue_async<F, T, E>(
+        &self,
+        func: F,
+    ) -> Result<oneshot::Receiver<Result<T, E>>, TrySendError<Command>>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        self.conn_tx
+            .try_send(Command::Func(Box::new(AsyncFunc { tx, func })))?;
+        Ok(rx)
+    }
+
+    fn enqueue_blocking<F, T, E>(
+        &self,
+        func: F,
+    ) -> Result<Receiver<Result<T, E>>, TrySendError<Command>>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: Send + 'static,
+    {
+        let (tx, rx) = bounded(1);
+        self.conn_tx
+            .try_send(Command::Func(Box::new(BlockingFunc { tx, func })))?;
+        Ok(rx)
+    }
+
     /// Invokes the provided function with a [`rusqlite::Connection`].
     pub async fn conn<F, T>(&self, func: F) -> Result<T, Error>
     where
         F: FnOnce(&Connection) -> Result<T, rusqlite::Error> + Send + 'static,
         T: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        self.conn_tx.send(Command::Func(Box::new(move |conn| {
-            _ = tx.send(run_catching(conn, |conn| func(conn)));
-        })))?;
+        let rx = self
+            .enqueue_async(move |conn| run_catching(conn, |conn| func(conn)))
+            .map_err(Error::from)?;
         rx.await?
     }
 
@@ -259,10 +391,9 @@ impl Client {
         F: FnOnce(&mut Connection) -> Result<T, rusqlite::Error> + Send + 'static,
         T: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        self.conn_tx.send(Command::Func(Box::new(move |conn| {
-            _ = tx.send(run_catching(conn, func));
-        })))?;
+        let rx = self
+            .enqueue_async(move |conn| run_catching(conn, func))
+            .map_err(Error::from)?;
         rx.await?
     }
 
@@ -276,11 +407,8 @@ impl Client {
         T: Send + 'static,
         E: From<rusqlite::Error> + From<Error> + Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        self.conn_tx
-            .send(Command::Func(Box::new(move |conn| {
-                _ = tx.send(run_catching_and_then(conn, |conn| func(conn)));
-            })))
+        let rx = self
+            .enqueue_async(move |conn| run_catching_and_then(conn, |conn| func(conn)))
             .map_err(Error::from)?;
         rx.await.map_err(Error::from)?
     }
@@ -295,11 +423,8 @@ impl Client {
         T: Send + 'static,
         E: From<rusqlite::Error> + From<Error> + Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        self.conn_tx
-            .send(Command::Func(Box::new(move |conn| {
-                _ = tx.send(run_catching_and_then(conn, func));
-            })))
+        let rx = self
+            .enqueue_async(move |conn| run_catching_and_then(conn, func))
             .map_err(Error::from)?;
         rx.await.map_err(Error::from)?
     }
@@ -310,10 +435,16 @@ impl Client {
     /// `self::conn_mut()` will return an [`Error::Closed`] error.
     pub async fn close(&self) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
-        let func = Box::new(|res| _ = tx.send(res));
-        if self.conn_tx.send(Command::Shutdown(func)).is_err() {
-            // If the worker thread has already shut down, return Ok here.
-            return Ok(());
+        match self
+            .conn_tx
+            .try_send(Command::Shutdown(Box::new(AsyncShutdown { tx })))
+        {
+            Ok(()) => {}
+            Err(TrySendError::Disconnected(_)) => {
+                // If the worker thread has already shut down, return Ok here.
+                return Ok(());
+            }
+            Err(err) => return Err(err.into()),
         }
         // If receiving fails, the connection is already closed.
         rx.await.unwrap_or(Ok(()))
@@ -326,10 +457,9 @@ impl Client {
         F: FnOnce(&Connection) -> Result<T, rusqlite::Error> + Send + 'static,
         T: Send + 'static,
     {
-        let (tx, rx) = bounded(1);
-        self.conn_tx.send(Command::Func(Box::new(move |conn| {
-            _ = tx.send(run_catching(conn, |conn| func(conn)));
-        })))?;
+        let rx = self
+            .enqueue_blocking(move |conn| run_catching(conn, |conn| func(conn)))
+            .map_err(Error::from)?;
         rx.recv()?
     }
 
@@ -340,10 +470,9 @@ impl Client {
         F: FnOnce(&mut Connection) -> Result<T, rusqlite::Error> + Send + 'static,
         T: Send + 'static,
     {
-        let (tx, rx) = bounded(1);
-        self.conn_tx.send(Command::Func(Box::new(move |conn| {
-            _ = tx.send(run_catching(conn, func));
-        })))?;
+        let rx = self
+            .enqueue_blocking(move |conn| run_catching(conn, func))
+            .map_err(Error::from)?;
         rx.recv()?
     }
 
@@ -354,9 +483,13 @@ impl Client {
     /// `self::conn_mut_blocking()` will return an [`Error::Closed`] error.
     pub fn close_blocking(&self) -> Result<(), Error> {
         let (tx, rx) = bounded(1);
-        let func = Box::new(move |res| _ = tx.send(res));
-        if self.conn_tx.send(Command::Shutdown(func)).is_err() {
-            return Ok(());
+        match self
+            .conn_tx
+            .try_send(Command::Shutdown(Box::new(BlockingShutdown { tx })))
+        {
+            Ok(()) => {}
+            Err(TrySendError::Disconnected(_)) => return Ok(()),
+            Err(err) => return Err(err.into()),
         }
         // If receiving fails, the connection is already closed.
         rx.recv().unwrap_or(Ok(()))

@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_sqlite::{ClientBuilder, Error, JournalMode, PoolBuilder};
+use futures_util::FutureExt;
 
 static SHARED_MEMORY_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -213,6 +214,8 @@ async_test!(test_shared_memory_rejects_empty_name);
 async_test!(test_pool_journal_mode);
 async_test!(test_pool_conn_for_each);
 async_test!(test_pool_close_concurrent);
+async_test!(test_canceled_async_command_is_skipped);
+async_test!(test_client_queue_capacity_reports_full);
 async_test!(test_pool_num_conns_zero_clamps);
 async_test!(test_closure_panic_surfaces_error);
 async_test!(test_panic_after_begin_immediate_rolls_back);
@@ -533,6 +536,81 @@ async fn test_pool_close_concurrent() {
 
     let res = pool.conn(|c| c.execute("SELECT 1", ())).await;
     assert!(matches!(res, Err(Error::Closed)));
+}
+
+async fn test_canceled_async_command_is_skipped() {
+    let client = ClientBuilder::new()
+        .open()
+        .await
+        .expect("client unable to be opened");
+
+    client
+        .conn(|conn| {
+            conn.execute("CREATE TABLE testing (id INTEGER PRIMARY KEY)", ())?;
+            Ok(())
+        })
+        .await
+        .expect("creating table");
+
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let mut blocker = Box::pin(client.conn(move |_| {
+        started_tx.send(()).expect("notifying blocker started");
+        release_rx.recv().expect("waiting for blocker release");
+        Ok(())
+    }));
+
+    assert!(blocker.as_mut().now_or_never().is_none());
+    started_rx.recv().expect("waiting for blocker to start");
+
+    let mut canceled = Box::pin(client.conn(|conn| {
+        conn.execute("INSERT INTO testing VALUES (1)", ())?;
+        Ok(())
+    }));
+    assert!(canceled.as_mut().now_or_never().is_none());
+    drop(canceled);
+
+    release_tx.send(()).expect("releasing blocker");
+    blocker.await.expect("blocker finished");
+
+    let row_count: i64 = client
+        .conn(|conn| conn.query_row("SELECT COUNT(*) FROM testing", (), |row| row.get(0)))
+        .await
+        .expect("counting rows");
+    assert_eq!(row_count, 0);
+
+    client.close().await.expect("closing client");
+}
+
+async fn test_client_queue_capacity_reports_full() {
+    let client = ClientBuilder::new()
+        .queue_capacity(1)
+        .open()
+        .await
+        .expect("client unable to be opened");
+
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let mut blocker = Box::pin(client.conn(move |_| {
+        started_tx.send(()).expect("notifying blocker started");
+        release_rx.recv().expect("waiting for blocker release");
+        Ok(())
+    }));
+
+    assert!(blocker.as_mut().now_or_never().is_none());
+    started_rx.recv().expect("waiting for blocker to start");
+
+    let mut queued = Box::pin(client.conn(|_| Ok(())));
+    assert!(queued.as_mut().now_or_never().is_none());
+
+    let res: Result<(), Error> = client.conn(|_| Ok(())).await;
+    assert!(matches!(res, Err(Error::QueueFull)));
+
+    release_tx.send(()).expect("releasing blocker");
+    blocker.await.expect("blocker finished");
+    queued.await.expect("queued command finished");
+
+    client.close().await.expect("closing client");
 }
 
 async fn test_closure_panic_surfaces_error() {
