@@ -39,6 +39,7 @@ pub struct PoolBuilder {
     journal_mode: Option<JournalMode>,
     vfs: Option<String>,
     num_conns: Option<usize>,
+    queue_capacity: Option<usize>,
 }
 
 impl PoolBuilder {
@@ -116,6 +117,19 @@ impl PoolBuilder {
     /// ```
     pub fn num_conns(mut self, num_conns: usize) -> Self {
         self.num_conns = Some(num_conns.max(1));
+        self
+    }
+
+    /// Limit the number of commands that may wait in each connection's worker
+    /// queue.
+    ///
+    /// By default, each queue is unbounded. If a capacity is configured, calls
+    /// return [`Error::QueueFull`] when a selected connection already has that
+    /// many commands waiting for its worker thread. A capacity of `0` allows a
+    /// command to be accepted only when the worker is ready to receive it
+    /// immediately.
+    pub fn queue_capacity(mut self, queue_capacity: usize) -> Self {
+        self.queue_capacity = Some(queue_capacity);
         self
     }
 
@@ -234,6 +248,7 @@ impl PoolBuilder {
             flags: self.connection_flags(),
             journal_mode: self.journal_mode,
             vfs: self.vfs.clone(),
+            queue_capacity: self.queue_capacity,
         }
     }
 

@@ -42,6 +42,11 @@ let value: String = client.conn(|conn| {
 println!("Value is: {value}");
 ```
 
+Async operations that are queued and then canceled before the worker starts
+them are skipped. `ClientBuilder::queue_capacity()` and
+`PoolBuilder::queue_capacity()` can be used to bound worker queues; operations
+return `Error::QueueFull` when the selected queue is full.
+
 A `Pool` represents a collection of background sqlite3 connections that can be
 called concurrently from any thread in your program.
 

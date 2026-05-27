@@ -4,6 +4,8 @@
 pub enum Error {
     /// Indicates that the connection to the sqlite database is closed.
     Closed,
+    /// Indicates that the sqlite worker queue is full.
+    QueueFull,
     /// Invalid builder configuration.
     Config { message: &'static str },
     /// Error updating PRAGMA.
@@ -31,6 +33,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Closed => write!(f, "connection to sqlite database closed"),
+            Error::QueueFull => write!(f, "sqlite worker queue is full"),
             Error::Config { message } => write!(f, "invalid configuration: {message}"),
             Error::PragmaUpdate { exp, got, name } => {
                 write!(f, "updating pragma {name}: expected '{exp}', got '{got}'")
@@ -50,6 +53,15 @@ impl From<rusqlite::Error> for Error {
 impl<T> From<crossbeam_channel::SendError<T>> for Error {
     fn from(_value: crossbeam_channel::SendError<T>) -> Self {
         Error::Closed
+    }
+}
+
+impl<T> From<crossbeam_channel::TrySendError<T>> for Error {
+    fn from(value: crossbeam_channel::TrySendError<T>) -> Self {
+        match value {
+            crossbeam_channel::TrySendError::Full(_) => Error::QueueFull,
+            crossbeam_channel::TrySendError::Disconnected(_) => Error::Closed,
+        }
     }
 }
 
