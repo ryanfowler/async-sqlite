@@ -12,7 +12,7 @@ keywords = ["sqlite", "sqlite3", "rusqlite", "async", "tokio"]
 categories = ["database"]
 
 [features]
-default = ["bundled"]
+default = ["bundled", "cache", "ffi-sqlite-wasm-rs"]
 array = ["rusqlite/array"]
 backup = ["rusqlite/backup"]
 blob = ["rusqlite/blob"]
@@ -22,17 +22,26 @@ bundled-sqlcipher = ["rusqlite/bundled-sqlcipher"]
 bundled-sqlcipher-vendored-openssl = [
     "rusqlite/bundled-sqlcipher-vendored-openssl",
 ]
+cache = ["rusqlite/cache"]
 chrono = ["rusqlite/chrono"]
+collation = ["rusqlite/collation"]
 column_decltype = ["rusqlite/column_decltype"]
+column_metadata = ["rusqlite/column_metadata"]
 csv = ["rusqlite/csv"]
 csvtab = ["rusqlite/csvtab"]
 fallible_uint = ["rusqlite/fallible_uint"]
+ffi-sqlite-wasm-rs = ["rusqlite/ffi-sqlite-wasm-rs"]
 functions = ["rusqlite/functions"]
 hooks = ["rusqlite/hooks"]
+i128_blob = ["rusqlite/i128_blob"]
+jiff = ["rusqlite/jiff"]
 limits = ["rusqlite/limits"]
 load_extension = ["rusqlite/load_extension"]
 modern-full = ["rusqlite/modern-full"]
+preupdate_hook = ["rusqlite/preupdate_hook"]
 serde_json = ["rusqlite/serde_json"]
+serialize = ["rusqlite/serialize"]
+series = ["rusqlite/series"]
 session = ["rusqlite/session"]
 sqlcipher = ["rusqlite/sqlcipher"]
 time = ["rusqlite/time"]
@@ -47,7 +56,7 @@ window = ["rusqlite/window"]
 crossbeam-channel = { version = "0.5" }
 futures-channel = { version = "0.3" }
 futures-util = { version = "0.3" }
-rusqlite = { version = "0.40.0" }
+rusqlite = { version = "0.40.0", default-features = false }
 
 [dev-dependencies]
 paste = { version = "1.0.12" }

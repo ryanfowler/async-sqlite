@@ -73,8 +73,9 @@
 //! This library tries to export almost all features that the underlying
 //! [rusqlite](https://docs.rs/rusqlite/latest/rusqlite/) library contains.
 //!
-//! A notable difference is that the `bundled` feature is **enabled** by default,
-//! but can be disabled with the following line in your Cargo.toml:
+//! A notable difference is that the `bundled` feature is **enabled** by default
+//! alongside rusqlite's `cache` and `ffi-sqlite-wasm-rs` defaults. These defaults
+//! can be disabled with the following line in your Cargo.toml:
 //!
 //! ```toml
 //! async-sqlite = { version = "*", default-features = false }
