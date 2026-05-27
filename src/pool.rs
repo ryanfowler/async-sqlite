@@ -334,6 +334,32 @@ impl Pool {
         self.get().conn_mut(func).await
     }
 
+    /// Invokes the provided function with a [`rusqlite::Connection`].
+    ///
+    /// Maps the result error type to a custom error; designed to be
+    /// used in conjunction with [`query_and_then`](https://docs.rs/rusqlite/latest/rusqlite/struct.CachedStatement.html#method.query_and_then).
+    pub async fn conn_and_then<F, T, E>(&self, func: F) -> Result<T, E>
+    where
+        F: FnOnce(&Connection) -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: From<rusqlite::Error> + From<Error> + Send + 'static,
+    {
+        self.get().conn_and_then(func).await
+    }
+
+    /// Invokes the provided function with a mutable [`rusqlite::Connection`].
+    ///
+    /// Maps the result error type to a custom error; designed to be
+    /// used in conjunction with [`query_and_then`](https://docs.rs/rusqlite/latest/rusqlite/struct.CachedStatement.html#method.query_and_then).
+    pub async fn conn_mut_and_then<F, T, E>(&self, func: F) -> Result<T, E>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: From<rusqlite::Error> + From<Error> + Send + 'static,
+    {
+        self.get().conn_mut_and_then(func).await
+    }
+
     /// Closes the underlying sqlite connections.
     ///
     /// After this method returns, all calls to `self::conn()` or
@@ -363,6 +389,34 @@ impl Pool {
         T: Send + 'static,
     {
         self.get().conn_mut_blocking(func)
+    }
+
+    /// Invokes the provided function with a [`rusqlite::Connection`], blocking
+    /// the current thread.
+    ///
+    /// Maps the result error type to a custom error; designed to be
+    /// used in conjunction with [`query_and_then`](https://docs.rs/rusqlite/latest/rusqlite/struct.CachedStatement.html#method.query_and_then).
+    pub fn conn_and_then_blocking<F, T, E>(&self, func: F) -> Result<T, E>
+    where
+        F: FnOnce(&Connection) -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: From<rusqlite::Error> + From<Error> + Send + 'static,
+    {
+        self.get().conn_and_then_blocking(func)
+    }
+
+    /// Invokes the provided function with a mutable [`rusqlite::Connection`],
+    /// blocking the current thread.
+    ///
+    /// Maps the result error type to a custom error; designed to be
+    /// used in conjunction with [`query_and_then`](https://docs.rs/rusqlite/latest/rusqlite/struct.CachedStatement.html#method.query_and_then).
+    pub fn conn_mut_and_then_blocking<F, T, E>(&self, func: F) -> Result<T, E>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: From<rusqlite::Error> + From<Error> + Send + 'static,
+    {
+        self.get().conn_mut_and_then_blocking(func)
     }
 
     /// Closes the underlying sqlite connections, blocking the current thread.

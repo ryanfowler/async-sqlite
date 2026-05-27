@@ -476,6 +476,40 @@ impl Client {
         rx.recv()?
     }
 
+    /// Invokes the provided function with a [`rusqlite::Connection`],
+    /// blocking the current thread until completion.
+    ///
+    /// Maps the result error type to a custom error; designed to be
+    /// used in conjunction with [`query_and_then`](https://docs.rs/rusqlite/latest/rusqlite/struct.CachedStatement.html#method.query_and_then).
+    pub fn conn_and_then_blocking<F, T, E>(&self, func: F) -> Result<T, E>
+    where
+        F: FnOnce(&Connection) -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: From<rusqlite::Error> + From<Error> + Send + 'static,
+    {
+        let rx = self
+            .enqueue_blocking(move |conn| run_catching_and_then(conn, |conn| func(conn)))
+            .map_err(Error::from)?;
+        rx.recv().map_err(Error::from)?
+    }
+
+    /// Invokes the provided function with a mutable [`rusqlite::Connection`],
+    /// blocking the current thread until completion.
+    ///
+    /// Maps the result error type to a custom error; designed to be
+    /// used in conjunction with [`query_and_then`](https://docs.rs/rusqlite/latest/rusqlite/struct.CachedStatement.html#method.query_and_then).
+    pub fn conn_mut_and_then_blocking<F, T, E>(&self, func: F) -> Result<T, E>
+    where
+        F: FnOnce(&mut Connection) -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: From<rusqlite::Error> + From<Error> + Send + 'static,
+    {
+        let rx = self
+            .enqueue_blocking(move |conn| run_catching_and_then(conn, func))
+            .map_err(Error::from)?;
+        rx.recv().map_err(Error::from)?
+    }
+
     /// Closes the underlying sqlite connection, blocking the current thread
     /// until complete.
     ///
