@@ -215,6 +215,7 @@ async_test!(test_pool_conn_for_each);
 async_test!(test_pool_close_concurrent);
 async_test!(test_pool_num_conns_zero_clamps);
 async_test!(test_closure_panic_surfaces_error);
+async_test!(test_panic_after_begin_immediate_rolls_back);
 
 async fn test_journal_mode() {
     for (journal_mode, expected) in journal_modes() {
@@ -561,6 +562,55 @@ async fn test_closure_panic_surfaces_error() {
         .conn(|conn| conn.query_row("SELECT 1", (), |row| row.get::<_, i64>(0)))
         .await
         .expect("connection still usable after panic");
+
+    client.close().await.expect("closing client");
+}
+
+async fn test_panic_after_begin_immediate_rolls_back() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let db_path = tmp_dir.path().join("sqlite.db");
+    let client = ClientBuilder::new()
+        .path(&db_path)
+        .open()
+        .await
+        .expect("client unable to be opened");
+
+    client
+        .conn(|conn| {
+            conn.execute(
+                "CREATE TABLE testing (id INTEGER PRIMARY KEY, val TEXT NOT NULL)",
+                (),
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("creating table");
+
+    let res: Result<(), Error> = client
+        .conn(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE")?;
+            conn.execute("INSERT INTO testing VALUES (1, ?)", ["panic"])?;
+            panic!("boom after BEGIN IMMEDIATE");
+        })
+        .await;
+    match res {
+        Err(Error::Panic { message }) => assert!(message.contains("boom"), "got {message}"),
+        other => panic!("expected Error::Panic, got {other:?}"),
+    }
+
+    let row_count: i64 = client
+        .conn(|conn| conn.query_row("SELECT COUNT(*) FROM testing", (), |row| row.get(0)))
+        .await
+        .expect("counting rows after rollback");
+    assert_eq!(row_count, 0);
+
+    let other = rusqlite::Connection::open(&db_path).expect("opening second connection");
+    other
+        .busy_timeout(std::time::Duration::from_millis(0))
+        .expect("setting busy timeout");
+    other
+        .execute("INSERT INTO testing VALUES (2, ?)", ["other"])
+        .expect("second connection can write after panic rollback");
 
     client.close().await.expect("closing client");
 }

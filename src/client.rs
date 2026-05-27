@@ -109,28 +109,40 @@ enum Command {
     Shutdown(Box<dyn FnOnce(Result<(), Error>) + Send>),
 }
 
-fn run_catching<F, T>(func: F) -> Result<T, Error>
+fn run_catching<F, T>(conn: &mut Connection, func: F) -> Result<T, Error>
 where
-    F: FnOnce() -> Result<T, rusqlite::Error>,
+    F: FnOnce(&mut Connection) -> Result<T, rusqlite::Error>,
 {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(func)) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| func(conn))) {
         Ok(res) => res.map_err(Error::from),
-        Err(p) => Err(Error::Panic {
-            message: panic_message(&*p),
-        }),
+        Err(p) => {
+            rollback_if_needed(conn);
+            Err(Error::Panic {
+                message: panic_message(&*p),
+            })
+        }
     }
 }
 
-fn run_catching_and_then<F, T, E>(func: F) -> Result<T, E>
+fn run_catching_and_then<F, T, E>(conn: &mut Connection, func: F) -> Result<T, E>
 where
-    F: FnOnce() -> Result<T, E>,
+    F: FnOnce(&mut Connection) -> Result<T, E>,
     E: From<Error>,
 {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(func)) {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| func(conn))) {
         Ok(res) => res,
-        Err(p) => Err(E::from(Error::Panic {
-            message: panic_message(&*p),
-        })),
+        Err(p) => {
+            rollback_if_needed(conn);
+            Err(E::from(Error::Panic {
+                message: panic_message(&*p),
+            }))
+        }
+    }
+}
+
+fn rollback_if_needed(conn: &mut Connection) {
+    if !conn.is_autocommit() {
+        let _ = conn.execute_batch("ROLLBACK");
     }
 }
 
@@ -236,7 +248,7 @@ impl Client {
     {
         let (tx, rx) = oneshot::channel();
         self.conn_tx.send(Command::Func(Box::new(move |conn| {
-            _ = tx.send(run_catching(|| func(conn)));
+            _ = tx.send(run_catching(conn, |conn| func(conn)));
         })))?;
         rx.await?
     }
@@ -249,7 +261,7 @@ impl Client {
     {
         let (tx, rx) = oneshot::channel();
         self.conn_tx.send(Command::Func(Box::new(move |conn| {
-            _ = tx.send(run_catching(|| func(conn)));
+            _ = tx.send(run_catching(conn, func));
         })))?;
         rx.await?
     }
@@ -267,7 +279,7 @@ impl Client {
         let (tx, rx) = oneshot::channel();
         self.conn_tx
             .send(Command::Func(Box::new(move |conn| {
-                _ = tx.send(run_catching_and_then(|| func(conn)));
+                _ = tx.send(run_catching_and_then(conn, |conn| func(conn)));
             })))
             .map_err(Error::from)?;
         rx.await.map_err(Error::from)?
@@ -286,7 +298,7 @@ impl Client {
         let (tx, rx) = oneshot::channel();
         self.conn_tx
             .send(Command::Func(Box::new(move |conn| {
-                _ = tx.send(run_catching_and_then(|| func(conn)));
+                _ = tx.send(run_catching_and_then(conn, func));
             })))
             .map_err(Error::from)?;
         rx.await.map_err(Error::from)?
@@ -316,7 +328,7 @@ impl Client {
     {
         let (tx, rx) = bounded(1);
         self.conn_tx.send(Command::Func(Box::new(move |conn| {
-            _ = tx.send(run_catching(|| func(conn)));
+            _ = tx.send(run_catching(conn, |conn| func(conn)));
         })))?;
         rx.recv()?
     }
@@ -330,7 +342,7 @@ impl Client {
     {
         let (tx, rx) = bounded(1);
         self.conn_tx.send(Command::Func(Box::new(move |conn| {
-            _ = tx.send(run_catching(|| func(conn)));
+            _ = tx.send(run_catching(conn, func));
         })))?;
         rx.recv()?
     }
