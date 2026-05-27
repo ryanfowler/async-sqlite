@@ -4,6 +4,8 @@
 pub enum Error {
     /// Indicates that the connection to the sqlite database is closed.
     Closed,
+    /// Invalid builder configuration.
+    Config { message: &'static str },
     /// Error updating PRAGMA.
     PragmaUpdate {
         name: &'static str,
@@ -29,6 +31,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Closed => write!(f, "connection to sqlite database closed"),
+            Error::Config { message } => write!(f, "invalid configuration: {message}"),
             Error::PragmaUpdate { exp, got, name } => {
                 write!(f, "updating pragma {name}: expected '{exp}', got '{got}'")
             }

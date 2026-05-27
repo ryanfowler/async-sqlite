@@ -28,9 +28,9 @@ The library has three core types in `src/`:
 
 - **Client** (`client.rs`): Wraps a single SQLite connection. Spawns a background `std::thread` that receives commands (closures) via a `crossbeam_channel`. Results are returned through `futures_channel::oneshot`. This design makes it runtime-agnostic. Client is cheaply cloneable.
 
-- **Pool** (`pool.rs`): Manages multiple `Client` instances with round-robin selection via an atomic counter. Provides the same API as Client plus `conn_for_each()` for executing on all connections. Defaults to CPU-count connections.
+- **Pool** (`pool.rs`): Manages multiple `Client` instances with round-robin selection via an atomic counter. Provides the same API as Client plus `conn_for_each()` for executing on all connections. File-backed and named shared-memory pools default to CPU-count connections; anonymous in-memory pools default to one connection and reject explicit multi-connection configuration.
 
-- **Error** (`error.rs`): Non-exhaustive enum wrapping `rusqlite::Error`, channel errors, and pragma failures.
+- **Error** (`error.rs`): Non-exhaustive enum wrapping config errors, `rusqlite::Error`, channel errors, panics, and pragma failures.
 
 All database operations use a closure-based API (e.g., `conn(|conn| { ... })`) to avoid lifetime issues with the cross-thread boundary. Both blocking and async variants exist for all operations.
 
