@@ -45,6 +45,13 @@ println!("Value is: {value}");
 A `Pool` represents a collection of background sqlite3 connections that can be
 called concurrently from any thread in your program.
 
+`PoolBuilder::new().open()` and `path(":memory:")` use a single anonymous
+in-memory connection by default, since separate SQLite `:memory:` connections
+do not share schema or data. File-backed pools default to the logical CPU
+count. For multiple connections to a named in-memory database, use
+`shared_memory("name")`; this uses SQLite shared-cache mode, which has caveats,
+so prefer a file-backed database when possible.
+
 To create a sqlite pool and run a query:
 
 ```rust

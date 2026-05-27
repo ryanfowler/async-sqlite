@@ -1,4 +1,20 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use async_sqlite::{ClientBuilder, Error, JournalMode, PoolBuilder};
+
+static SHARED_MEMORY_ID: AtomicUsize = AtomicUsize::new(0);
+
+fn shared_memory_name(prefix: &str) -> String {
+    let id = SHARED_MEMORY_ID.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}-{}-{id}", std::process::id())
+}
+
+fn assert_config_message(err: Error, expected: &str) {
+    match err {
+        Error::Config { message } => assert_eq!(message, expected),
+        other => panic!("expected Error::Config, got {other:?}"),
+    }
+}
 
 fn journal_modes() -> [(JournalMode, &'static str); 6] {
     [
@@ -43,6 +59,43 @@ fn test_blocking_client() {
 }
 
 #[test]
+fn test_blocking_default_pool_in_memory_uses_one_connection() {
+    let pool = PoolBuilder::new()
+        .open_blocking()
+        .expect("pool unable to be opened");
+
+    pool.conn_blocking(|conn| {
+        conn.execute(
+            "CREATE TABLE testing (id INTEGER PRIMARY KEY, val TEXT NOT NULL)",
+            (),
+        )?;
+        conn.execute("INSERT INTO testing VALUES (1, ?)", ["value1"])
+    })
+    .expect("writing schema and seed data");
+
+    pool.conn_blocking(|conn| {
+        let val: String =
+            conn.query_row("SELECT val FROM testing WHERE id=?", [1], |row| row.get(0))?;
+        assert_eq!(val, "value1");
+        Ok(())
+    })
+    .expect("querying for result");
+
+    let results = pool.conn_for_each_blocking(|_| Ok(()));
+    assert_eq!(results.len(), 1);
+
+    pool.close_blocking().expect("closing pool");
+
+    let pool = PoolBuilder::new()
+        .path(":memory:")
+        .open_blocking()
+        .expect("pool unable to be opened");
+    let results = pool.conn_for_each_blocking(|_| Ok(()));
+    assert_eq!(results.len(), 1);
+    pool.close_blocking().expect("closing pool");
+}
+
+#[test]
 fn test_blocking_pool() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let pool = PoolBuilder::new()
@@ -69,6 +122,39 @@ fn test_blocking_pool() {
     .expect("querying for result");
 
     pool.close_blocking().expect("closing client conn");
+}
+
+#[test]
+fn test_blocking_pool_rejects_multi_connection_anonymous_memory() {
+    let err = match PoolBuilder::new().num_conns(2).open_blocking() {
+        Ok(pool) => {
+            pool.close_blocking().expect("closing unexpected pool");
+            panic!("expected pool open to fail");
+        }
+        Err(err) => err,
+    };
+
+    assert_config_message(
+        err,
+        "anonymous in-memory pools cannot use multiple connections; call path(...) for file-backed pools or shared_memory(...) for named shared in-memory pools",
+    );
+
+    let err = match PoolBuilder::new()
+        .path(":memory:")
+        .num_conns(2)
+        .open_blocking()
+    {
+        Ok(pool) => {
+            pool.close_blocking().expect("closing unexpected pool");
+            panic!("expected pool open to fail");
+        }
+        Err(err) => err,
+    };
+
+    assert_config_message(
+        err,
+        "anonymous in-memory pools cannot use multiple connections; call path(...) for file-backed pools or shared_memory(...) for named shared in-memory pools",
+    );
 }
 
 #[test]
@@ -119,7 +205,11 @@ macro_rules! async_test {
 
 async_test!(test_journal_mode);
 async_test!(test_concurrency);
+async_test!(test_default_pool_in_memory_uses_one_connection);
 async_test!(test_pool);
+async_test!(test_pool_rejects_multi_connection_anonymous_memory);
+async_test!(test_shared_memory_pool);
+async_test!(test_shared_memory_rejects_empty_name);
 async_test!(test_pool_journal_mode);
 async_test!(test_pool_conn_for_each);
 async_test!(test_pool_close_concurrent);
@@ -178,6 +268,46 @@ async fn test_concurrency() {
         .expect("collecting query results");
 }
 
+async fn test_default_pool_in_memory_uses_one_connection() {
+    let pool = PoolBuilder::new()
+        .open()
+        .await
+        .expect("pool unable to be opened");
+
+    pool.conn(|conn| {
+        conn.execute(
+            "CREATE TABLE testing (id INTEGER PRIMARY KEY, val TEXT NOT NULL)",
+            (),
+        )?;
+        conn.execute("INSERT INTO testing VALUES (1, ?)", ["value1"])
+    })
+    .await
+    .expect("writing schema and seed data");
+
+    pool.conn(|conn| {
+        let val: String =
+            conn.query_row("SELECT val FROM testing WHERE id=?", [1], |row| row.get(0))?;
+        assert_eq!(val, "value1");
+        Ok(())
+    })
+    .await
+    .expect("querying for result");
+
+    let results = pool.conn_for_each(|_| Ok(())).await;
+    assert_eq!(results.len(), 1);
+
+    pool.close().await.expect("closing pool");
+
+    let pool = PoolBuilder::new()
+        .path(":memory:")
+        .open()
+        .await
+        .expect("pool unable to be opened");
+    let results = pool.conn_for_each(|_| Ok(())).await;
+    assert_eq!(results.len(), 1);
+    pool.close().await.expect("closing pool");
+}
+
 async fn test_pool() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let pool = PoolBuilder::new()
@@ -210,6 +340,88 @@ async fn test_pool() {
         .into_iter()
         .collect::<Result<(), Error>>()
         .expect("collecting query results");
+}
+
+async fn test_pool_rejects_multi_connection_anonymous_memory() {
+    let err = match PoolBuilder::new().num_conns(2).open().await {
+        Ok(pool) => {
+            pool.close().await.expect("closing unexpected pool");
+            panic!("expected pool open to fail");
+        }
+        Err(err) => err,
+    };
+
+    assert_config_message(
+        err,
+        "anonymous in-memory pools cannot use multiple connections; call path(...) for file-backed pools or shared_memory(...) for named shared in-memory pools",
+    );
+
+    let err = match PoolBuilder::new()
+        .path(":memory:")
+        .num_conns(2)
+        .open()
+        .await
+    {
+        Ok(pool) => {
+            pool.close().await.expect("closing unexpected pool");
+            panic!("expected pool open to fail");
+        }
+        Err(err) => err,
+    };
+
+    assert_config_message(
+        err,
+        "anonymous in-memory pools cannot use multiple connections; call path(...) for file-backed pools or shared_memory(...) for named shared in-memory pools",
+    );
+}
+
+async fn test_shared_memory_pool() {
+    let name = shared_memory_name("shared-pool");
+    let pool = PoolBuilder::new()
+        .shared_memory(&name)
+        .num_conns(2)
+        .open()
+        .await
+        .expect("pool unable to be opened");
+
+    let results = pool.conn_for_each(|_| Ok(())).await;
+    assert_eq!(results.len(), 2);
+
+    pool.conn(|conn| {
+        conn.execute(
+            "CREATE TABLE testing (id INTEGER PRIMARY KEY, val TEXT NOT NULL)",
+            (),
+        )?;
+        conn.execute("INSERT INTO testing VALUES (1, ?)", ["value1"])
+    })
+    .await
+    .expect("writing schema and seed data");
+
+    let results = pool
+        .conn_for_each(|conn| {
+            conn.query_row("SELECT val FROM testing WHERE id=?", [1], |row| {
+                row.get::<_, String>(0)
+            })
+        })
+        .await;
+
+    for result in results {
+        assert_eq!(result.unwrap(), "value1");
+    }
+
+    pool.close().await.expect("closing pool");
+}
+
+async fn test_shared_memory_rejects_empty_name() {
+    let err = match PoolBuilder::new().shared_memory("").open().await {
+        Ok(pool) => {
+            pool.close().await.expect("closing unexpected pool");
+            panic!("expected pool open to fail");
+        }
+        Err(err) => err,
+    };
+
+    assert_config_message(err, "shared memory database name must not be empty");
 }
 
 async fn test_pool_journal_mode() {

@@ -34,6 +34,7 @@ use rusqlite::{Connection, OpenFlags};
 #[derive(Clone, Debug, Default)]
 pub struct PoolBuilder {
     path: Option<PathBuf>,
+    shared_memory_name: Option<String>,
     flags: OpenFlags,
     journal_mode: Option<JournalMode>,
     vfs: Option<String>,
@@ -51,6 +52,30 @@ impl PoolBuilder {
     /// By default, an in-memory database is used.
     pub fn path<P: AsRef<Path>>(mut self, path: P) -> Self {
         self.path = Some(path.as_ref().into());
+        self.shared_memory_name = None;
+        self
+    }
+
+    /// Use a named shared in-memory sqlite database.
+    ///
+    /// This opens connections with a URI of the form
+    /// `file:<name>?mode=memory&cache=shared` and enables
+    /// [`OpenFlags::SQLITE_OPEN_URI`] and
+    /// [`OpenFlags::SQLITE_OPEN_SHARED_CACHE`].
+    ///
+    /// SQLite shared-cache mode has caveats and is discouraged by SQLite for
+    /// many workloads. Prefer a file-backed database when possible. The
+    /// in-memory database is deleted after the last connection using this name
+    /// is closed.
+    ///
+    /// ```
+    /// use async_sqlite::PoolBuilder;
+    ///
+    /// let builder = PoolBuilder::new().shared_memory("my-pool").num_conns(2);
+    /// ```
+    pub fn shared_memory<N: AsRef<str>>(mut self, name: N) -> Self {
+        self.path = None;
+        self.shared_memory_name = Some(name.as_ref().to_owned());
         self
     }
 
@@ -78,8 +103,11 @@ impl PoolBuilder {
 
     /// Specify the number of sqlite connections to open as part of the pool.
     ///
-    /// Defaults to the number of logical CPUs of the current system. Values
-    /// less than `1` are clamped to `1`.
+    /// File-backed and shared-memory pools default to the number of logical
+    /// CPUs of the current system. Anonymous in-memory pools, including
+    /// `path(":memory:")`, default to `1` connection because each sqlite
+    /// `:memory:` connection is a separate database. Values less than `1` are
+    /// clamped to `1`.
     ///
     /// ```
     /// use async_sqlite::PoolBuilder;
@@ -104,30 +132,16 @@ impl PoolBuilder {
     /// ```
     pub async fn open(self) -> Result<Pool, Error> {
         let num_conns = self.get_num_conns();
+        self.validate(num_conns)?;
 
         // Open the first connection with full config (including journal_mode).
         // This must complete before opening remaining connections to avoid
         // concurrent PRAGMA writes on a new database file.
-        let first = ClientBuilder {
-            path: self.path.clone(),
-            flags: self.flags,
-            journal_mode: self.journal_mode,
-            vfs: self.vfs.clone(),
-        }
-        .open()
-        .await?;
+        let first = self.client_builder().open().await?;
 
         // Open remaining connections with journal_mode too, so connection-local
         // modes are applied consistently across the pool.
-        let opens = (1..num_conns).map(|_| {
-            ClientBuilder {
-                path: self.path.clone(),
-                flags: self.flags,
-                journal_mode: self.journal_mode,
-                vfs: self.vfs.clone(),
-            }
-            .open()
-        });
+        let opens = (1..num_conns).map(|_| self.client_builder().open());
         let mut clients = vec![first];
         clients.extend(
             join_all(opens)
@@ -158,30 +172,17 @@ impl PoolBuilder {
     /// ```
     pub fn open_blocking(self) -> Result<Pool, Error> {
         let num_conns = self.get_num_conns();
+        self.validate(num_conns)?;
 
         // Open the first connection with full config (including journal_mode).
-        let first = ClientBuilder {
-            path: self.path.clone(),
-            flags: self.flags,
-            journal_mode: self.journal_mode,
-            vfs: self.vfs.clone(),
-        }
-        .open_blocking()?;
+        let first = self.client_builder().open_blocking()?;
 
         // Open remaining connections with journal_mode too, so connection-local
         // modes are applied consistently across the pool.
         let mut clients = vec![first];
         clients.extend(
             (1..num_conns)
-                .map(|_| {
-                    ClientBuilder {
-                        path: self.path.clone(),
-                        flags: self.flags,
-                        journal_mode: self.journal_mode,
-                        vfs: self.vfs.clone(),
-                    }
-                    .open_blocking()
-                })
+                .map(|_| self.client_builder().open_blocking())
                 .collect::<Result<Vec<Client>, Error>>()?,
         );
 
@@ -194,11 +195,95 @@ impl PoolBuilder {
     }
 
     fn get_num_conns(&self) -> usize {
-        self.num_conns.unwrap_or_else(|| {
-            available_parallelism()
-                .unwrap_or_else(|_| NonZeroUsize::new(1).unwrap())
-                .into()
-        })
+        if let Some(num_conns) = self.num_conns {
+            return num_conns;
+        }
+
+        if self.is_anonymous_memory() {
+            return 1;
+        }
+
+        available_parallelism()
+            .unwrap_or_else(|_| NonZeroUsize::new(1).unwrap())
+            .into()
+    }
+
+    fn validate(&self, num_conns: usize) -> Result<(), Error> {
+        if self
+            .shared_memory_name
+            .as_ref()
+            .is_some_and(|name| name.is_empty())
+        {
+            return Err(Error::Config {
+                message: "shared memory database name must not be empty",
+            });
+        }
+
+        if self.is_anonymous_memory() && num_conns > 1 {
+            return Err(Error::Config {
+                message: "anonymous in-memory pools cannot use multiple connections; call path(...) for file-backed pools or shared_memory(...) for named shared in-memory pools",
+            });
+        }
+
+        Ok(())
+    }
+
+    fn client_builder(&self) -> ClientBuilder {
+        ClientBuilder {
+            path: self.connection_path(),
+            flags: self.connection_flags(),
+            journal_mode: self.journal_mode,
+            vfs: self.vfs.clone(),
+        }
+    }
+
+    fn connection_path(&self) -> Option<PathBuf> {
+        self.shared_memory_name
+            .as_deref()
+            .map(shared_memory_uri)
+            .or_else(|| self.path.clone())
+    }
+
+    fn connection_flags(&self) -> OpenFlags {
+        let mut flags = self.flags;
+        if self.shared_memory_name.is_some() {
+            flags.insert(OpenFlags::SQLITE_OPEN_URI);
+            flags.insert(OpenFlags::SQLITE_OPEN_SHARED_CACHE);
+            flags.remove(OpenFlags::SQLITE_OPEN_PRIVATE_CACHE);
+        }
+        flags
+    }
+
+    fn is_anonymous_memory(&self) -> bool {
+        self.shared_memory_name.is_none()
+            && self
+                .path
+                .as_deref()
+                .is_none_or(|path| path == Path::new(":memory:"))
+    }
+}
+
+fn shared_memory_uri(name: &str) -> PathBuf {
+    let mut uri = String::from("file:");
+    push_uri_encoded(name, &mut uri);
+    uri.push_str("?mode=memory&cache=shared");
+    uri.into()
+}
+
+fn push_uri_encoded(input: &str, out: &mut String) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte.into());
+            }
+            _ => {
+                out.push('%');
+                out.push(HEX[(byte >> 4) as usize].into());
+                out.push(HEX[(byte & 0x0F) as usize].into());
+            }
+        }
     }
 }
 
