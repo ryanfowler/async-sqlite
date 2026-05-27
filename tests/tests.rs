@@ -1,5 +1,16 @@
 use async_sqlite::{ClientBuilder, Error, JournalMode, PoolBuilder};
 
+fn journal_modes() -> [(JournalMode, &'static str); 6] {
+    [
+        (JournalMode::Delete, "delete"),
+        (JournalMode::Truncate, "truncate"),
+        (JournalMode::Persist, "persist"),
+        (JournalMode::Memory, "memory"),
+        (JournalMode::Wal, "wal"),
+        (JournalMode::Off, "off"),
+    ]
+}
+
 #[test]
 fn test_blocking_client() {
     let tmp_dir = tempfile::tempdir().unwrap();
@@ -60,6 +71,32 @@ fn test_blocking_pool() {
     pool.close_blocking().expect("closing client conn");
 }
 
+#[test]
+fn test_blocking_pool_journal_mode() {
+    for (journal_mode, expected) in journal_modes() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let pool = PoolBuilder::new()
+            .journal_mode(journal_mode)
+            .path(tmp_dir.path().join("sqlite.db"))
+            .num_conns(4)
+            .open_blocking()
+            .expect("pool unable to be opened");
+
+        let results = pool.conn_for_each_blocking(|conn| {
+            conn.query_row("PRAGMA journal_mode", (), |row| row.get(0))
+        });
+        for (idx, result) in results.into_iter().enumerate() {
+            let mode: String = result.unwrap();
+            assert_eq!(
+                mode, expected,
+                "{journal_mode:?} journal mode mismatch on connection {idx}"
+            );
+        }
+
+        pool.close_blocking().expect("closing pool");
+    }
+}
+
 macro_rules! async_test {
     ($name:ident) => {
         paste::item! {
@@ -90,18 +127,21 @@ async_test!(test_pool_num_conns_zero_clamps);
 async_test!(test_closure_panic_surfaces_error);
 
 async fn test_journal_mode() {
-    let tmp_dir = tempfile::tempdir().unwrap();
-    let client = ClientBuilder::new()
-        .journal_mode(JournalMode::Wal)
-        .path(tmp_dir.path().join("sqlite.db"))
-        .open()
-        .await
-        .expect("client unable to be opened");
-    let mode: String = client
-        .conn(|conn| conn.query_row("PRAGMA journal_mode", (), |row| row.get(0)))
-        .await
-        .expect("client unable to fetch journal_mode");
-    assert_eq!(mode, "wal");
+    for (journal_mode, expected) in journal_modes() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let client = ClientBuilder::new()
+            .journal_mode(journal_mode)
+            .path(tmp_dir.path().join("sqlite.db"))
+            .open()
+            .await
+            .expect("client unable to be opened");
+        let mode: String = client
+            .conn(|conn| conn.query_row("PRAGMA journal_mode", (), |row| row.get(0)))
+            .await
+            .expect("client unable to fetch journal_mode");
+        assert_eq!(mode, expected, "{journal_mode:?} journal mode mismatch");
+        client.close().await.expect("closing client");
+    }
 }
 
 async fn test_concurrency() {
@@ -173,25 +213,29 @@ async fn test_pool() {
 }
 
 async fn test_pool_journal_mode() {
-    let tmp_dir = tempfile::tempdir().unwrap();
-    let pool = PoolBuilder::new()
-        .journal_mode(JournalMode::Wal)
-        .path(tmp_dir.path().join("sqlite.db"))
-        .num_conns(4)
-        .open()
-        .await
-        .expect("pool unable to be opened");
+    for (journal_mode, expected) in journal_modes() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let pool = PoolBuilder::new()
+            .journal_mode(journal_mode)
+            .path(tmp_dir.path().join("sqlite.db"))
+            .num_conns(4)
+            .open()
+            .await
+            .expect("pool unable to be opened");
 
-    // Verify all connections see WAL journal mode.
-    let results = pool
-        .conn_for_each(|conn| conn.query_row("PRAGMA journal_mode", (), |row| row.get(0)))
-        .await;
-    for result in results {
-        let mode: String = result.unwrap();
-        assert_eq!(mode, "wal");
+        let results = pool
+            .conn_for_each(|conn| conn.query_row("PRAGMA journal_mode", (), |row| row.get(0)))
+            .await;
+        for (idx, result) in results.into_iter().enumerate() {
+            let mode: String = result.unwrap();
+            assert_eq!(
+                mode, expected,
+                "{journal_mode:?} journal mode mismatch on connection {idx}"
+            );
+        }
+
+        pool.close().await.expect("closing pool");
     }
-
-    pool.close().await.expect("closing pool");
 }
 
 async fn test_pool_conn_for_each() {
