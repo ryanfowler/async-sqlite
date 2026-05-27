@@ -36,7 +36,7 @@ All database operations use a closure-based API (e.g., `conn(|conn| { ... })`) t
 
 ## Features
 
-All Cargo features are pass-through to `rusqlite`. The `bundled` feature (default) bundles SQLite. The library re-exports `rusqlite` for downstream use.
+All Cargo features are pass-through to `rusqlite`. The `rusqlite` dependency has `default-features = false`; async-sqlite explicitly defaults to `bundled` plus rusqlite's `cache` and `ffi-sqlite-wasm-rs` defaults. The library re-exports `rusqlite` for downstream use.
 
 ## Testing
 
