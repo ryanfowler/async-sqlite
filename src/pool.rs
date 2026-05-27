@@ -117,13 +117,13 @@ impl PoolBuilder {
         .open()
         .await?;
 
-        // Open remaining connections without journal_mode since it's a
-        // database-level setting already applied by the first connection.
+        // Open remaining connections with journal_mode too, so connection-local
+        // modes are applied consistently across the pool.
         let opens = (1..num_conns).map(|_| {
             ClientBuilder {
                 path: self.path.clone(),
                 flags: self.flags,
-                journal_mode: None,
+                journal_mode: self.journal_mode,
                 vfs: self.vfs.clone(),
             }
             .open()
@@ -168,8 +168,8 @@ impl PoolBuilder {
         }
         .open_blocking()?;
 
-        // Open remaining connections without journal_mode since it's a
-        // database-level setting already applied by the first connection.
+        // Open remaining connections with journal_mode too, so connection-local
+        // modes are applied consistently across the pool.
         let mut clients = vec![first];
         clients.extend(
             (1..num_conns)
@@ -177,7 +177,7 @@ impl PoolBuilder {
                     ClientBuilder {
                         path: self.path.clone(),
                         flags: self.flags,
-                        journal_mode: None,
+                        journal_mode: self.journal_mode,
                         vfs: self.vfs.clone(),
                     }
                     .open_blocking()
