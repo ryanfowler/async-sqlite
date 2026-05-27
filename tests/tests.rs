@@ -28,6 +28,32 @@ fn journal_modes() -> [(JournalMode, &'static str); 6] {
     ]
 }
 
+#[derive(Debug)]
+enum CustomError {
+    AsyncSqlite,
+    Rusqlite,
+    User(&'static str),
+}
+
+impl From<Error> for CustomError {
+    fn from(_value: Error) -> Self {
+        Self::AsyncSqlite
+    }
+}
+
+impl From<rusqlite::Error> for CustomError {
+    fn from(_value: rusqlite::Error) -> Self {
+        Self::Rusqlite
+    }
+}
+
+fn assert_user_error(result: Result<(), CustomError>, expected: &'static str) {
+    match result {
+        Err(CustomError::User(actual)) => assert_eq!(actual, expected),
+        other => panic!("expected CustomError::User({expected:?}), got {other:?}"),
+    }
+}
+
 #[test]
 fn test_blocking_client() {
     let tmp_dir = tempfile::tempdir().unwrap();
@@ -55,6 +81,39 @@ fn test_blocking_client() {
             Ok(())
         })
         .expect("querying for result");
+
+    client.close_blocking().expect("closing client conn");
+}
+
+#[test]
+fn test_blocking_client_and_then_api() {
+    let client = ClientBuilder::new()
+        .open_blocking()
+        .expect("client unable to be opened");
+
+    client
+        .conn_and_then_blocking(|conn| {
+            conn.execute(
+                "CREATE TABLE testing (id INTEGER PRIMARY KEY, val INTEGER NOT NULL)",
+                (),
+            )?;
+            conn.execute("INSERT INTO testing VALUES (1, ?)", [42])?;
+            Ok::<(), CustomError>(())
+        })
+        .expect("writing schema and seed data");
+
+    let val: i64 = client
+        .conn_mut_and_then_blocking(|conn| {
+            conn.query_row("SELECT val FROM testing WHERE id=?", [1], |row| row.get(0))
+                .map_err(CustomError::from)
+        })
+        .expect("querying for result");
+    assert_eq!(val, 42);
+
+    assert_user_error(
+        client.conn_and_then_blocking(|_| Err(CustomError::User("client"))),
+        "client",
+    );
 
     client.close_blocking().expect("closing client conn");
 }
@@ -123,6 +182,38 @@ fn test_blocking_pool() {
     .expect("querying for result");
 
     pool.close_blocking().expect("closing client conn");
+}
+
+#[test]
+fn test_blocking_pool_and_then_api() {
+    let pool = PoolBuilder::new()
+        .open_blocking()
+        .expect("pool unable to be opened");
+
+    pool.conn_and_then_blocking(|conn| {
+        conn.execute(
+            "CREATE TABLE testing (id INTEGER PRIMARY KEY, val INTEGER NOT NULL)",
+            (),
+        )?;
+        conn.execute("INSERT INTO testing VALUES (1, ?)", [42])?;
+        Ok::<(), CustomError>(())
+    })
+    .expect("writing schema and seed data");
+
+    let val: i64 = pool
+        .conn_mut_and_then_blocking(|conn| {
+            conn.query_row("SELECT val FROM testing WHERE id=?", [1], |row| row.get(0))
+                .map_err(CustomError::from)
+        })
+        .expect("querying for result");
+    assert_eq!(val, 42);
+
+    assert_user_error(
+        pool.conn_and_then_blocking(|_| Err(CustomError::User("pool"))),
+        "pool",
+    );
+
+    pool.close_blocking().expect("closing pool");
 }
 
 #[test]
@@ -208,6 +299,7 @@ async_test!(test_journal_mode);
 async_test!(test_concurrency);
 async_test!(test_default_pool_in_memory_uses_one_connection);
 async_test!(test_pool);
+async_test!(test_pool_and_then_api);
 async_test!(test_pool_rejects_multi_connection_anonymous_memory);
 async_test!(test_shared_memory_pool);
 async_test!(test_shared_memory_rejects_empty_name);
@@ -344,6 +436,41 @@ async fn test_pool() {
         .into_iter()
         .collect::<Result<(), Error>>()
         .expect("collecting query results");
+}
+
+async fn test_pool_and_then_api() {
+    let pool = PoolBuilder::new()
+        .open()
+        .await
+        .expect("pool unable to be opened");
+
+    pool.conn_and_then(|conn| {
+        conn.execute(
+            "CREATE TABLE testing (id INTEGER PRIMARY KEY, val INTEGER NOT NULL)",
+            (),
+        )?;
+        conn.execute("INSERT INTO testing VALUES (1, ?)", [42])?;
+        Ok::<(), CustomError>(())
+    })
+    .await
+    .expect("writing schema and seed data");
+
+    let val: i64 = pool
+        .conn_mut_and_then(|conn| {
+            conn.query_row("SELECT val FROM testing WHERE id=?", [1], |row| row.get(0))
+                .map_err(CustomError::from)
+        })
+        .await
+        .expect("querying for result");
+    assert_eq!(val, 42);
+
+    assert_user_error(
+        pool.conn_and_then(|_| Err(CustomError::User("pool async")))
+            .await,
+        "pool async",
+    );
+
+    pool.close().await.expect("closing pool");
 }
 
 async fn test_pool_rejects_multi_connection_anonymous_memory() {
