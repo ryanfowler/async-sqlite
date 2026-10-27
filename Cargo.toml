@@ -56,7 +56,7 @@ window = ["rusqlite/window"]
 crossbeam-channel = { version = "0.5" }
 futures-channel = { version = "0.3" }
 futures-util = { version = "0.3" }
-rusqlite = { version = "0.40.0", default-features = false }
+rusqlite = { version = "0.41.0", default-features = false }
 
 [dev-dependencies]
 paste = { version = "1.0.12" }
